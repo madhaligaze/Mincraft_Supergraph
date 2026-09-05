@@ -23,6 +23,11 @@ const loaderBar = document.getElementById('loader-bar') as HTMLElement;
 const loaderLabel = document.getElementById('loader-label') as HTMLElement;
 const playButton = document.getElementById('play') as HTMLButtonElement;
 
+/**
+ * The label stays hidden while things go well — the bar says everything a
+ * loading screen needs to. It keeps receiving the text anyway, because the
+ * smoke test reads it to find out what stage a failed boot died on.
+ */
 function setProgress(fraction: number, label: string): void {
   loaderBar.style.width = `${Math.round(clamp(fraction, 0, 1) * 100)}%`;
   loaderLabel.textContent = label;
@@ -32,6 +37,7 @@ function fail(message: string): void {
   setProgress(1, '');
   loaderLabel.textContent = message;
   loaderLabel.style.color = '#e88';
+  loaderLabel.hidden = false;
   playButton.disabled = true;
 }
 

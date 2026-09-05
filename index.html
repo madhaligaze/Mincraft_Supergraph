@@ -29,16 +29,14 @@
 
     <div id="overlay">
       <div class="panel">
-        <h1>SUPERGRAPH</h1>
-        <p class="tagline">воксельный движок · нативный рендер · без шейдер-паков</p>
         <div id="loader"><div id="loader-bar"></div></div>
-        <p id="loader-label">инициализация…</p>
+        <!--
+          Carries the progress text, but stays hidden: the bar already says how
+          far along the load is. It is revealed only when startup fails, which
+          is the one case where there is something to read.
+        -->
+        <p id="loader-label" hidden></p>
         <button id="play" type="button" disabled>Играть</button>
-        <p class="hint">
-          <b>WASD</b> движение · <b>Space</b> прыжок · <b>Shift</b> красться · <b>F</b> полёт<br />
-          <b>ЛКМ</b> сломать · <b>ПКМ</b> поставить · <b>1–9</b> блок · <b>колесо</b> выбор<br />
-          <b>F3</b> статистика · <b>F4</b> настройки · <b>Esc</b> курсор
-        </p>
       </div>
     </div>
 
