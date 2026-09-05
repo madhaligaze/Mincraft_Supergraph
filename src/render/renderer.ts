@@ -67,6 +67,29 @@ const BUCKET_DEBUG_COLOR: ReadonlyArray<readonly [number, number, number]> = [
 /** Instanced grass is not a bucket, but it paints pixels the same way. */
 const GRASS_DEBUG_COLOR: readonly [number, number, number] = [1.0, 0.35, 0.9];
 
+/**
+ * Concentric rings of grass, innermost first: `outer` is a fraction of the
+ * grass distance, `blades` the count per block.
+ *
+ * Thick underfoot, thinning outward — a blade at the far edge is thinner than
+ * a pixel, and drawing sixteen of them per block there buys nothing but vertex
+ * invocations.
+ *
+ * What keeps the steps invisible: blade positions are hashed from the cell and
+ * the blade index, so the first N blades of a dense ring are the very same
+ * blades, in the very same places, as the sparse ring beyond it. Only the
+ * surplus disappears, and it fades rather than pops. Blade size is a smooth
+ * function of distance instead of a per-ring constant, for the same reason.
+ */
+const GRASS_RINGS: ReadonlyArray<{ outer: number; blades: number }> = [
+  { outer: 0.28, blades: 16 },
+  { outer: 0.60, blades: 5 },
+  { outer: 1.0, blades: 2 },
+];
+
+/** How much wider and taller a blade gets at the far edge of the field. */
+const GRASS_FAR_SCALE: readonly [number, number] = [2.1, 1.25];
+
 export interface FrameState {
   cameraPosition: Vec3;
   cameraForward: Vec3;
@@ -1014,13 +1037,6 @@ export class Renderer implements MeshSink {
     const program = this.programs.get('grass');
     const s = this.settings;
 
-    // One cell per block, several blades per cell. A single blade per block
-    // reads as sparse stubble rather than as a lawn, and blades are cheap:
-    // seven vertices each, no fragment cost where they are rejected.
-    const gridSize = Math.max(4, Math.round(s.grassDistance * 2));
-    const bladesPerCell = Math.max(1, Math.round(s.grassDensity * 6));
-    const instances = gridSize * gridSize * bladesPerCell;
-
     this.state.useProgram(program.handle);
     this.state.setDepthWrite(true);
     this.state.setCull(false);
@@ -1040,13 +1056,12 @@ export class Renderer implements MeshSink {
     program.float('uCameraRadiusKm', this.sky.cameraRadiusKm);
     program.vec2('uHorizonAngles', this.sky.horizonAngles[0], this.sky.horizonAngles[1]);
     program.float('uSeaLevel', SEA_LEVEL);
-    program.int('uGridSize', gridSize);
-    program.int('uBladesPerCell', bladesPerCell);
     program.int('uDebugView', this.debugView);
     program.vec3('uDebugBucket', ...GRASS_DEBUG_COLOR);
-    program.float('uGrassDistance', s.grassDistance);
     program.float('uBladeHeight', 0.42);
     program.float('uBladeWidth', 0.024);
+    program.float('uGrassDistance', s.grassDistance);
+    program.vec2('uBladeGrow', GRASS_FAR_SCALE[0], GRASS_FAR_SCALE[1]);
 
     if (this.shadows) {
       program.mat4Array('uShadowMatrices', this.shadows.matrixData);
@@ -1057,8 +1072,33 @@ export class Renderer implements MeshSink {
     }
 
     this.state.bindVAO(this.emptyVao);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 7, instances);
-    this.stats.drawCalls++;
+
+    // One draw per ring. The grid is square and anchored to whole blocks, so it
+    // has to be wide enough for the ring's outer radius plus a block of margin
+    // for the blade's own offset inside its cell.
+    let inner = 0;
+    for (const [i, ring] of GRASS_RINGS.entries()) {
+      const outer = s.grassDistance * ring.outer;
+      const blades = Math.max(1, Math.round(ring.blades * s.grassDensity));
+      const carry = i + 1 < GRASS_RINGS.length
+        ? Math.max(1, Math.round(GRASS_RINGS[i + 1].blades * s.grassDensity))
+        : 0;
+
+      // Even, so that half the grid is a whole number of blocks and cells stay
+      // anchored to integer world coordinates — that anchoring is what stops
+      // blades from swimming as the camera moves.
+      const gridSize = 2 * (Math.ceil(outer) + 1);
+
+      program.int('uGridSize', gridSize);
+      program.int('uBladesPerCell', blades);
+      program.int('uCarryBlades', carry);
+      program.vec2('uRingRadii', inner, outer);
+
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 7, gridSize * gridSize * blades);
+      this.stats.drawCalls++;
+
+      inner = outer;
+    }
 
     this.state.setBlend(false);
     this.state.setDepthWrite(false);

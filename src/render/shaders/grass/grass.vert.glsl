@@ -8,6 +8,12 @@
 //
 // That is what makes dense ground cover affordable on an iGPU: no per-frame
 // buffer upload, no CPU placement pass, and no draw call per patch.
+//
+// Density is not uniform. The field is drawn as concentric rings, one draw per
+// ring, each with its own blade count per block: thick underfoot, thinning
+// outward. The alternative — one dense grid thinned by a per-blade random —
+// pays a vertex invocation for every blade it then throws away, and most of
+// those are far from the camera where they were never going to be seen.
 
 #include "lib/common.glsl"
 #include "lib/scene.glsl"
@@ -16,8 +22,21 @@
 uniform int uGridSize;
 /** Blades per cell. */
 uniform int uBladesPerCell;
-/** Radius in blocks at which blades have fully faded out. */
+/** Band this draw covers: x = inner radius, y = outer, both in blocks. */
+uniform vec2 uRingRadii;
+/**
+ * How many blades per cell the next ring outward keeps.
+ *
+ * Blade positions are hashed from the cell and the blade index, so the first
+ * `uCarryBlades` of them are in exactly the same place in both rings and simply
+ * continue across the boundary. Only the surplus has to go, and it fades out
+ * over the outer part of this band rather than vanishing on a line.
+ */
+uniform int uCarryBlades;
+/** Outer radius of the whole field; only the size curve below uses it. */
 uniform float uGrassDistance;
+/** How much wider and taller a blade gets at that outer radius. */
+uniform vec2 uBladeGrow;
 uniform float uBladeHeight;
 uniform float uBladeWidth;
 
@@ -59,21 +78,31 @@ void main() {
   vec2 rnd2 = hash22(cell * 1.37 + float(bladeIndex) * 91.7);
   vec2 pos = cell + rnd;
 
-  vec4 surface = fetchSurface(pos);
-  float groundHeight = surface.r * 255.0;
-  float material = surface.g * 255.0;
-  float skyLight = surface.b;
-
   float distance = length(pos - uCameraPos.xz);
 
-  // Reject everything that should not grow a blade. Collapsing to a point
-  // behind the near plane is the cheapest possible discard.
-  bool valid =
-    abs(material - MATERIAL_GRASS) < 0.5 &&
-    distance < uGrassDistance &&
-    // Density thins out with distance instead of stopping at a hard ring.
-    rnd2.x < mix(1.0, 0.25, saturate(distance / uGrassDistance));
+  // The surplus over what the next ring keeps fades out across the outer part
+  // of this band, so density steps down gradually instead of on a circle.
+  float fadeStart = mix(uRingRadii.y, uRingRadii.x, 0.35);
+  float fade = bladeIndex < uCarryBlades
+    ? 1.0
+    : 1.0 - smoothstep(fadeStart, uRingRadii.y, distance);
 
+  // The band test comes first, before any texture read: the grid is square and
+  // the band is round, so a fifth of the instances in every draw exist only to
+  // be thrown away, and they must cost nothing but their own invocation.
+  bool valid = distance >= uRingRadii.x && distance < uRingRadii.y && fade > 0.002;
+
+  float groundHeight = 0.0;
+  float skyLight = 0.0;
+  if (valid) {
+    vec4 surface = fetchSurface(pos);
+    groundHeight = surface.r * 255.0;
+    skyLight = surface.b;
+    valid = abs(surface.g * 255.0 - MATERIAL_GRASS) < 0.5;
+  }
+
+  // Collapsing to a point behind the near plane is the cheapest possible
+  // discard: no fragment, no clipping work, no rasteriser setup.
   if (!valid) {
     gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
     vWorldPos = vec3(0.0);
@@ -90,9 +119,16 @@ void main() {
   float segment = float(v >> 1) / 3.0;
   float side = v == 6 ? 0.0 : (float(v & 1) * 2.0 - 1.0);
 
-  float heightScale = mix(0.7, 1.35, rnd2.y);
+  // Blades grow with distance. The far rings have a fraction of the blades, so
+  // each one has to cover more ground, and out there it is already thinner than
+  // a pixel — only its coverage still reads. Driven by distance rather than by
+  // the ring, so a blade that carries across a ring boundary does not change
+  // size as it crosses.
+  float grow = saturate(distance / max(uGrassDistance, 1.0));
+  float heightScale = mix(0.7, 1.35, rnd2.y) * mix(1.0, uBladeGrow.y, grow);
   float height = uBladeHeight * heightScale;
-  float width = uBladeWidth * mix(0.8, 1.2, rnd.x) * (1.0 - segment * 0.85);
+  float width = uBladeWidth * mix(1.0, uBladeGrow.x, grow) *
+    mix(0.8, 1.2, rnd.x) * (1.0 - segment * 0.85);
 
   // Facing direction, randomised per blade.
   float angle = rnd2.x * TAU;
@@ -138,7 +174,7 @@ void main() {
   // black spikes against the ground if the root goes too dark.
   vColor = tint * mix(0.62, 1.25, segment) * mix(0.85, 1.15, rnd2.y);
 
-  vFade = 1.0 - smoothstep(uGrassDistance * 0.65, uGrassDistance, distance);
+  vFade = fade;
 
   gl_Position = uViewProj * vec4(worldPos, 1.0);
 }
