@@ -16,6 +16,8 @@
 
 uniform sampler2DArray uAlbedoArray;
 uniform sampler2DArray uSurfaceArray;
+/** R = height, G = F0, B = subsurface, A = emission. See packLoader.ts. */
+uniform sampler2DArray uMaterialArray;
 uniform sampler2D uAmbientOcclusion;
 /** Material tile resolution, for the manual mip estimate below. */
 uniform float uTextureSize;
@@ -65,11 +67,18 @@ void main() {
 #endif
 
   vec4 surface = texture(uSurfaceArray, vec3(vUv, vTexLayer));
+  vec4 matData = texture(uMaterialArray, vec3(vUv, vTexLayer));
 
   vec3 albedo = albedoSample.rgb * vTint;
   float perceptualRoughness = clamp(surface.b, 0.045, 1.0);
   float textureAO = surface.a;
-  float metallic = 0.0;
+
+  // LabPBR encodes reflectance rather than a metal flag. Values at the top of
+  // the range mean "metal", where F0 is the albedo itself; everything below is
+  // a dielectric whose F0 was measured rather than assumed to be 0.04.
+  float f0Encoded = matData.g;
+  float metallic = f0Encoded > 0.9 ? 1.0 : 0.0;
+  float dielectricF0 = mix(0.02, 0.16, f0Encoded / 0.9);
 
   // --- normal ---
   vec3 faceNormal = vFaceNormal;
@@ -147,7 +156,7 @@ void main() {
     // canopy look like painted cardboard.
     float wrapped = wrappedDiffuse(NoL, 0.55);
     vec3 diffuse = albedo * INV_PI * wrapped;
-    vec3 specular = directBRDF(albedo, metallic, roughness, N, V, uSunDirection.xyz) - albedo * INV_PI * saturate(NoL);
+    vec3 specular = directBRDF(albedo, metallic, roughness, N, V, uSunDirection.xyz, dielectricF0) - albedo * INV_PI * saturate(NoL);
     color += (diffuse + max(specular, vec3(0.0))) * sunRadiance * shadow;
 
     // Light bleeding through from behind. Tinted warm and desaturated: light
@@ -158,7 +167,7 @@ void main() {
     vec3 transmitTint = mix(albedo, vec3(luminance(albedo)) * vec3(1.15, 1.0, 0.65), 0.45);
     color += transmitTint * sunRadiance * shadow * backlight * transmission * 0.3;
 #else
-    color += directBRDF(albedo, metallic, roughness, N, V, uSunDirection.xyz) * sunRadiance * shadow;
+    color += directBRDF(albedo, metallic, roughness, N, V, uSunDirection.xyz, dielectricF0) * sunRadiance * shadow;
 #endif
   }
 
@@ -166,7 +175,7 @@ void main() {
   if (uMoonDirection.w > 0.001) {
     float moonNoL = saturate(dot(N, uMoonDirection.xyz));
     vec3 moonRadiance = uMoonColor.rgb * uMoonDirection.w;
-    color += directBRDF(albedo, metallic, roughness, N, V, uMoonDirection.xyz) *
+    color += directBRDF(albedo, metallic, roughness, N, V, uMoonDirection.xyz, dielectricF0) *
       moonRadiance * smoothstep(0.02, 0.4, skyVisibility) * moonNoL;
   }
 
@@ -184,7 +193,7 @@ void main() {
   color += ambientLighting(
     albedo, metallic, perceptualRoughness, N, V,
     skyRadiance * skyTerm, groundRadiance * mix(0.35, 1.0, skyTerm),
-    occlusion
+    occlusion, dielectricF0
   );
 
   // A floor so enclosed spaces read as dim rather than as pure black.
@@ -209,14 +218,16 @@ void main() {
     float window = saturate(1.0 - sq(sq(dist / radius)));
     float attenuation = window * window / (distSq + 1.0);
 
-    color += directBRDF(albedo, metallic, roughness, N, V, L) *
+    color += directBRDF(albedo, metallic, roughness, N, V, L, dielectricF0) *
       uPointLightColor[i].rgb * uPointLightColor[i].a * attenuation * occlusion;
   }
 
   // --- emissive materials ---
-#ifdef EMISSIVE
-  color += albedoSample.rgb * 3.0;
-#endif
+  // Emission comes per texel from the material map, so glowing veins in a
+  // block light up without the whole block becoming a lamp.
+  if (matData.a > 0.004) {
+    color += albedoSample.rgb * matData.a * matData.a * 9.0;
+  }
 
   // --- atmosphere ---
   color = applyAerialPerspective(color, vWorldPos, viewDir, viewDistance);

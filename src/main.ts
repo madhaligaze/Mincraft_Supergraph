@@ -87,8 +87,7 @@ async function boot(): Promise<void> {
   await nextFrame();
 
   try {
-    renderer.initResources((done, total, name) => {
-      // Called synchronously per material; the bar updates on the next paint.
+    await renderer.initResources((done, total, name) => {
       setProgress(0.32 + (done / total) * 0.28, `материал ${name} (${done}/${total})`);
     });
   } catch (error) {

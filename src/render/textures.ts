@@ -13,6 +13,7 @@
  */
 
 import { TEXTURES, type TextureName } from '../world/blocks.ts';
+import { loadPackMeta, loadPackMaterial, type PackedMaterial } from './packLoader.ts';
 
 // ---------------------------------------------------------------------------
 // Tileable noise primitives
@@ -644,11 +645,36 @@ function flowerMaterial(
 
 export interface MaterialTextures {
   albedo: WebGLTexture;
-  /** RG = tangent normal, B = roughness, A = ambient occlusion. */
+  /** RG = tangent normal, B = perceptual roughness, A = ambient occlusion. */
   surface: WebGLTexture;
+  /** R = height (for parallax), G = F0, B = subsurface, A = emission. */
+  material: WebGLTexture;
   layerCount: number;
   size: number;
+  /** True when a LabPBR pack supplied at least one material. */
+  usingPack: boolean;
+  packDescription: string;
+  /** Materials that fell back to procedural generation. */
+  proceduralNames: string[];
 }
+
+/**
+ * Materials that emit light, and how strongly, when generated procedurally.
+ * A LabPBR pack carries this per texel in the specular map's alpha channel.
+ */
+const PROCEDURAL_EMISSION: Partial<Record<TextureName, number>> = {
+  glowstone: 1.0,
+  lava: 0.85,
+};
+
+/**
+ * F0 reflectance for procedural materials, as a 0..255 byte.
+ * 10 is the dielectric default of 0.04; metals sit far higher.
+ */
+const PROCEDURAL_F0: Partial<Record<TextureName, number>> = {
+  iron_ore: 60, gold_ore: 90, diamond_ore: 45,
+  ice: 8, packed_ice: 8, water: 5, glass: 8,
+};
 
 /**
  * Bakes one material to CPU arrays. Used by the material contact-sheet page,
@@ -657,10 +683,11 @@ export interface MaterialTextures {
  */
 export function bakeMaterial(
   name: TextureName, size: number,
-): { albedo: Uint8Array; surface: Uint8Array } {
+): { albedo: Uint8Array; surface: Uint8Array; material: Uint8Array } {
   const scratch = new Float32Array(size * size * CH);
   const albedo = new Uint8Array(size * size * 4);
   const surface = new Uint8Array(size * size * 4);
+  const material = new Uint8Array(size * size * 4);
   const fn = MATERIALS[name];
 
   for (let y = 0; y < size; y++) {
@@ -680,7 +707,19 @@ export function bakeMaterial(
   }
 
   packSurface(scratch, size, surface, (NORMAL_STRENGTH[name] ?? 1.8) * (size / 128));
-  return { albedo, surface };
+
+  // The height field already exists — it is what the normal was derived from.
+  // Keeping it is what makes parallax possible without a pack.
+  const emission = Math.round((PROCEDURAL_EMISSION[name] ?? 0) * 255);
+  const f0 = PROCEDURAL_F0[name] ?? 10;
+  for (let p = 0; p < size * size; p++) {
+    material[p * 4] = Math.round(clamp01(scratch[p * CH + 4]) * 255);
+    material[p * 4 + 1] = f0;
+    material[p * 4 + 2] = 0;
+    material[p * 4 + 3] = emission;
+  }
+
+  return { albedo, surface, material };
 }
 
 /**
@@ -737,46 +776,93 @@ const NORMAL_STRENGTH: Partial<Record<TextureName, number>> = {
 };
 
 /**
- * Generates both array textures. `onProgress` is called between materials so a
- * caller can drive a loading bar; the whole set takes roughly 200 ms at 128px
- * on the target hardware.
+ * Builds the three array textures.
+ *
+ * A LabPBR pack is used where it supplies a material, and the procedural
+ * generator fills in the rest — which is not just a fallback: packs never ship
+ * water or lava, because those are drawn by the shader rather than sampled.
+ *
+ * When a pack is present its native tile size wins over the quality setting;
+ * mixing resolutions inside one array texture is not possible, and downscaling
+ * an authored texture to honour a slider would throw away the detail that was
+ * the reason for loading it.
  */
-export function generateMaterials(
+export async function createMaterials(
   gl: WebGL2RenderingContext,
-  size: number,
+  requestedSize: number,
   anisotropy: number,
   onProgress?: (done: number, total: number, name: string) => void,
-): MaterialTextures {
+): Promise<MaterialTextures> {
   const layers = TEXTURES.length;
+  const meta = await loadPackMeta();
+
+  // Probe one material to learn the pack's tile size before allocating.
+  let size = requestedSize;
+  let probe: PackedMaterial | null = null;
+  if (meta) {
+    const first = meta.materials[0] as TextureName | undefined;
+    if (first) {
+      probe = await loadPackMaterial(first);
+      if (probe) size = probe.size;
+    }
+  }
 
   const albedo = createArrayTexture(gl, size, layers, anisotropy, true);
   const surface = createArrayTexture(gl, size, layers, anisotropy, false);
+  const material = createArrayTexture(gl, size, layers, anisotropy, false);
+
+  const packNames = new Set(meta?.materials ?? []);
+  const proceduralNames: string[] = [];
+  let usedPack = false;
+
+  const upload = (texture: WebGLTexture, layer: number, data: Uint8Array): void => {
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+    gl.texSubImage3D(
+      gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, size, size, 1,
+      gl.RGBA, gl.UNSIGNED_BYTE, data,
+    );
+  };
 
   for (let layer = 0; layer < layers; layer++) {
     const name = TEXTURES[layer];
-    const { albedo: albedoLayer, surface: surfaceLayer } = bakeMaterial(name, size);
 
-    gl.bindTexture(gl.TEXTURE_2D_ARRAY, albedo);
-    gl.texSubImage3D(
-      gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, size, size, 1,
-      gl.RGBA, gl.UNSIGNED_BYTE, albedoLayer,
-    );
-    gl.bindTexture(gl.TEXTURE_2D_ARRAY, surface);
-    gl.texSubImage3D(
-      gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, size, size, 1,
-      gl.RGBA, gl.UNSIGNED_BYTE, surfaceLayer,
-    );
+    let loaded: PackedMaterial | null = null;
+    if (packNames.has(name)) {
+      loaded = probe && meta?.materials[0] === name ? probe : await loadPackMaterial(name);
+      // A pack tile of a different size cannot go into this array texture.
+      if (loaded && loaded.size !== size) loaded = null;
+    }
+
+    if (loaded) {
+      usedPack = true;
+      upload(albedo, layer, loaded.albedo);
+      upload(surface, layer, loaded.surface);
+      upload(material, layer, loaded.material);
+    } else {
+      proceduralNames.push(name);
+      const baked = bakeMaterial(name, size);
+      upload(albedo, layer, baked.albedo);
+      upload(surface, layer, baked.surface);
+      upload(material, layer, baked.material);
+    }
 
     onProgress?.(layer + 1, layers, name);
   }
 
-  gl.bindTexture(gl.TEXTURE_2D_ARRAY, albedo);
-  gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
-  gl.bindTexture(gl.TEXTURE_2D_ARRAY, surface);
-  gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+  for (const texture of [albedo, surface, material]) {
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+    gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+  }
   gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
 
-  return { albedo, surface, layerCount: layers, size };
+  return {
+    albedo, surface, material,
+    layerCount: layers,
+    size,
+    usingPack: usedPack,
+    packDescription: usedPack ? (meta?.description ?? '') : '',
+    proceduralNames,
+  };
 }
 
 function createArrayTexture(

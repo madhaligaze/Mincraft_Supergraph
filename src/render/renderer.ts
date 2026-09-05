@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The frame graph.
  *
  * Pass order, and why:
@@ -32,7 +32,7 @@ import { RenderTarget, FullscreenTriangle, formats } from './target.ts';
 import { ShadowMaps } from './shadows.ts';
 import { Sky } from './sky.ts';
 import { ChunkGeometry, type DrawItem } from './chunkGeometry.ts';
-import { generateMaterials, type MaterialTextures } from './textures.ts';
+import { createMaterials, type MaterialTextures } from './textures.ts';
 import { generateCloudNoise, type CloudNoise } from './cloudNoise.ts';
 import { GpuProfiler } from './gpuProfiler.ts';
 import { Bucket, type SectionMeshResult } from '../world/mesher.ts';
@@ -253,13 +253,15 @@ export class Renderer implements MeshSink {
   }
 
   /** Builds materials, shadow maps and the tint atlas. */
-  initResources(onProgress?: (done: number, total: number, label: string) => void): void {
+  async initResources(
+    onProgress?: (done: number, total: number, label: string) => void,
+  ): Promise<void> {
     const gl = this.gl;
     const s = this.settings;
 
     this.bindUniformBlocks();
 
-    this.materials = generateMaterials(
+    this.materials = await createMaterials(
       gl, s.textureResolution,
       Math.min(s.anisotropy, this.caps.maxAnisotropy),
       onProgress,
@@ -458,16 +460,27 @@ export class Renderer implements MeshSink {
       this.shadows = new ShadowMaps(this.gl, settings.shadowMapSize, settings.shadowCascades);
     }
 
-    if (previous.textureResolution !== settings.textureResolution ||
-      previous.anisotropy !== settings.anisotropy) {
-      if (this.materials) {
-        this.gl.deleteTexture(this.materials.albedo);
-        this.gl.deleteTexture(this.materials.surface);
-      }
-      this.materials = generateMaterials(
+    // A resource pack pins the tile size, so the resolution slider only
+    // matters for the procedural path. Rebuilding is asynchronous because
+    // loading a pack is; the old textures stay bound until it finishes, which
+    // is correct — a frame with the previous materials beats a frame with none.
+    if (
+      (previous.textureResolution !== settings.textureResolution ||
+        previous.anisotropy !== settings.anisotropy) &&
+      !this.materials?.usingPack
+    ) {
+      const stale = this.materials;
+      void createMaterials(
         this.gl, settings.textureResolution,
         Math.min(settings.anisotropy, this.caps.maxAnisotropy),
-      );
+      ).then((next) => {
+        this.materials = next;
+        if (stale) {
+          this.gl.deleteTexture(stale.albedo);
+          this.gl.deleteTexture(stale.surface);
+          this.gl.deleteTexture(stale.material);
+        }
+      });
     }
 
     if (previous.renderDistance !== settings.renderDistance) this.createTintAtlas();
@@ -862,12 +875,14 @@ export class Renderer implements MeshSink {
     this.state.bindTexture(3, gl.TEXTURE_2D, this.aoTargets[0].texture);
     this.state.bindTexture(4, gl.TEXTURE_2D, this.sky.skyView.texture);
     this.state.bindTexture(5, gl.TEXTURE_2D, this.sky.transmittance.texture);
+    this.state.bindTexture(11, gl.TEXTURE_2D_ARRAY, this.materials.material);
     if (this.shadows) {
       this.state.bindTexture(6, gl.TEXTURE_2D_ARRAY, this.shadows.texture);
     }
 
     program.int('uAlbedoArray', 0);
     program.int('uSurfaceArray', 1);
+    program.int('uMaterialArray', 11);
     program.int('uTintAtlas', 2);
     program.int('uAmbientOcclusion', 3);
     program.int('uSkyViewLut', 4);
@@ -1433,6 +1448,7 @@ export class Renderer implements MeshSink {
     if (this.materials) {
       this.gl.deleteTexture(this.materials.albedo);
       this.gl.deleteTexture(this.materials.surface);
+      this.gl.deleteTexture(this.materials.material);
     }
     if (this.cloudNoise) {
       this.gl.deleteTexture(this.cloudNoise.shape);

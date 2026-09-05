@@ -40,7 +40,7 @@ float F_Schlick(float f0, float f90, float VoH) {
  */
 vec3 directBRDF(
   vec3 albedo, float metallic, float roughness,
-  vec3 N, vec3 V, vec3 L
+  vec3 N, vec3 V, vec3 L, float reflectance
 ) {
   vec3 H = normalize(V + L);
   float NoV = abs(dot(N, V)) + 1e-5;
@@ -48,7 +48,9 @@ vec3 directBRDF(
   float NoH = saturate(dot(N, H));
   float VoH = saturate(dot(V, H));
 
-  vec3 f0 = mix(vec3(0.04), albedo, metallic);
+  // `reflectance` is the dielectric F0. A LabPBR pack measures it per material
+  // instead of assuming the 0.04 that most surfaces only approximately have.
+  vec3 f0 = mix(vec3(reflectance), albedo, metallic);
   vec3 diffuseColor = albedo * (1.0 - metallic);
 
   float D = D_GGX(NoH, roughness);
@@ -84,10 +86,10 @@ vec3 ambientLighting(
   vec3 albedo, float metallic, float perceptualRoughness,
   vec3 N, vec3 V,
   vec3 skyColor, vec3 groundColor,
-  float occlusion
+  float occlusion, float reflectance
 ) {
   float NoV = saturate(dot(N, V));
-  vec3 f0 = mix(vec3(0.04), albedo, metallic);
+  vec3 f0 = mix(vec3(reflectance), albedo, metallic);
   vec3 diffuseColor = albedo * (1.0 - metallic);
 
   float upness = N.y * 0.5 + 0.5;
