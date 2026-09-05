@@ -1,0 +1,22 @@
+node_modules/
+dist/
+
+# Resource packs are redistributed content and weigh tens of megabytes.
+# `node scripts/extract-pack.mjs` pulls the ~130 files the engine actually
+# needs out of one into public/pack/, which is what gets committed.
+*.zip
+
+# Measurement and screenshot output. Regenerate with the scripts in scripts/;
+# checking them in would put a few megabytes of PNG into every diff.
+scripts/gallery/
+scripts/*.png
+scripts/perf.json
+scripts/breakdown.json
+scripts/gputime.json
+scripts/probe.json
+scripts/resscale.json
+scripts/resbreak.json
+
+*.log
+.DS_Store
+Thumbs.db

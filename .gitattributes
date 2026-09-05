@@ -1,0 +1,6 @@
+# Keep line endings stable across platforms: the sources are LF, and letting
+# Git rewrite them to CRLF on Windows makes every checkout look modified.
+* text=auto eol=lf
+
+*.png binary
+*.zip binary

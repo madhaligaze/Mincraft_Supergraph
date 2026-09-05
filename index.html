@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Supergraph</title>
+    <!-- Inline so there is no extra request, and no 404 when there is no file. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f14'/%3E%3Cpath d='M6 19l10-6 10 6-10 6z' fill='%237fd4a8'/%3E%3Cpath d='M6 19v-6l10-6v6z' fill='%234f9c78'/%3E%3Cpath d='M26 19v-6l-10-6v6z' fill='%23356b53'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/src/ui/style.css" />
+  </head>
+  <body>
+    <canvas id="viewport"></canvas>
+
+    <div id="crosshair" hidden>
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 9v5M16 18v5M9 16h5M18 16h5" />
+        <circle cx="16" cy="16" r="1.1" />
+      </svg>
+    </div>
+
+    <div id="hud" hidden>
+      <div id="hotbar"></div>
+    </div>
+
+    <pre id="stats" hidden></pre>
+
+    <div id="overlay">
+      <div class="panel">
+        <h1>SUPERGRAPH</h1>
+        <p class="tagline">воксельный движок · нативный рендер · без шейдер-паков</p>
+        <div id="loader"><div id="loader-bar"></div></div>
+        <p id="loader-label">инициализация…</p>
+        <button id="play" type="button" disabled>Играть</button>
+        <p class="hint">
+          <b>WASD</b> движение · <b>Space</b> прыжок · <b>Shift</b> красться · <b>F</b> полёт<br />
+          <b>ЛКМ</b> сломать · <b>ПКМ</b> поставить · <b>1–9</b> блок · <b>колесо</b> выбор<br />
+          <b>F3</b> статистика · <b>F4</b> настройки · <b>Esc</b> курсор
+        </p>
+      </div>
+    </div>
+
+    <div id="settings" hidden></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
