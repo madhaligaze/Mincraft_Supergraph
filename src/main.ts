@@ -109,8 +109,16 @@ async function boot(): Promise<void> {
     : Math.floor(Math.random() * 0x7fffffff);
   const workerCount = clamp((navigator.hardwareConcurrency ?? 4) - 1, 1, 6);
   const world = new World(seed, workerCount);
-  world.renderDistance = settings.renderDistance;
   world.setSink(renderer);
+
+  /** Copies the streaming and detail-level settings into the world. */
+  function applyWorldSettings(): void {
+    world.renderDistance = settings.renderDistance;
+    world.lodEnabled = settings.lodEnabled;
+    world.lodNearChunks = settings.lodNearChunks;
+    world.lodFarChunks = settings.lodFarChunks;
+  }
+  applyWorldSettings();
 
   const input = new Input(canvas);
   const player = new Player(world, input);
@@ -123,7 +131,7 @@ async function boot(): Promise<void> {
       settings = next;
       preset = nextPreset;
       saveSettings(preset, settings);
-      world.renderDistance = settings.renderDistance;
+      applyWorldSettings();
       renderer.applySettings(settings);
       world.invalidateAtlases();
       resize();
@@ -272,7 +280,7 @@ async function boot(): Promise<void> {
       preset = name;
       settings = presetSettings(name);
       saveSettings(preset, settings);
-      world.renderDistance = settings.renderDistance;
+      applyWorldSettings();
       renderer.applySettings(settings);
       world.invalidateAtlases();
       resize();
@@ -281,7 +289,7 @@ async function boot(): Promise<void> {
     /** Overrides one setting without touching the rest, for A/B profiling. */
     setSetting(key: string, value: unknown) {
       (settings as unknown as Record<string, unknown>)[key] = value;
-      world.renderDistance = settings.renderDistance;
+      applyWorldSettings();
       renderer.applySettings(settings);
       world.invalidateAtlases();
       resize();

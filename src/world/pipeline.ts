@@ -9,7 +9,7 @@
 
 import { TerrainGenerator } from './generator.ts';
 import { LightSolver } from './lighting.ts';
-import { Mesher, type SectionMeshResult } from './mesher.ts';
+import { Mesher, type SectionMeshResult, type LodStep } from './mesher.ts';
 import { SECTION_COUNT } from './constants.ts';
 import type { ColumnStore } from './storage.ts';
 
@@ -40,11 +40,13 @@ export class ChunkPipeline {
     return true;
   }
 
-  /** Meshes one section. Requires the column to be lit. */
-  mesh(store: ColumnStore, cx: number, cz: number, sectionY: number): SectionMeshResult | null {
+  /** Meshes one section at the given decimation. Requires the column to be lit. */
+  mesh(
+    store: ColumnStore, cx: number, cz: number, sectionY: number, step: LodStep = 1,
+  ): SectionMeshResult | null {
     const column = store.get(cx, cz);
     if (!column || !column.lit) return null;
     if (sectionY < 0 || sectionY >= SECTION_COUNT) return null;
-    return this.mesher.mesh(store, cx, cz, sectionY);
+    return this.mesher.mesh(store, cx, cz, sectionY, step);
   }
 }

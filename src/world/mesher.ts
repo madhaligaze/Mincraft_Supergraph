@@ -24,10 +24,22 @@ import {
 import type { ColumnStore } from './storage.ts';
 import { hash3i } from '../core/math.ts';
 
-/** Region spans the section plus one block of neighbour data on every side. */
-const R = SECTION_HEIGHT + 2; // 34
-const R2 = R * R;
-const R3 = R2 * R;
+/**
+ * Region spans the section plus one cell of neighbour data on every side.
+ *
+ * At full detail a cell is a voxel and the region is 34^3. A level-of-detail
+ * mesh aggregates `step` voxels per cell, so it needs fewer cells; the buffers
+ * are allocated for the largest case and the smaller ones reuse the front of
+ * them.
+ */
+const MAX_R = SECTION_HEIGHT + 2; // 34
+const MAX_R3 = MAX_R * MAX_R * MAX_R;
+
+/** Decimation factors a section can be meshed at. */
+export type LodStep = 1 | 2 | 4;
+
+/** Level 0 is full detail; each level doubles the cell size. */
+export const LOD_STEPS: readonly LodStep[] = [1, 2, 4];
 
 export const VERTEX_STRIDE = 12;
 /** Positions are stored in eighths of a block so cross-quads can be inset. */
@@ -70,6 +82,8 @@ export interface SectionMeshResult {
   chunkX: number;
   chunkZ: number;
   sectionY: number;
+  /** Decimation this mesh was built at; 1 is full detail. */
+  step: LodStep;
   buckets: (SectionMesh | null)[];
   /** Local-space AABB of the emitted geometry, or null when empty. */
   bounds: Float32Array | null;
@@ -192,9 +206,18 @@ const FACE_SWAP_UV: ReadonlyArray<boolean> = [
 
 export class Mesher {
   /** Padded block ids for the section being meshed. */
-  private readonly blocks = new Uint8Array(R3);
+  private readonly blocks = new Uint8Array(MAX_R3);
   /** Padded packed light bytes. */
-  private readonly light = new Uint8Array(R3);
+  private readonly light = new Uint8Array(MAX_R3);
+
+  /** Voxels aggregated per cell for the mesh in progress. */
+  private step: LodStep = 1;
+  /** Cells per section side: 32, 16 or 8. */
+  private span = SECTION_HEIGHT;
+  /** Region side including the one-cell skirt. */
+  private rs = MAX_R;
+  private rs2 = MAX_R * MAX_R;
+
 
   private readonly writers: VertexWriter[] = [];
 
@@ -220,16 +243,33 @@ export class Mesher {
    * Meshes one 32^3 section. Requires the column and its eight neighbours to be
    * generated and lit.
    */
-  mesh(store: ColumnStore, chunkX: number, chunkZ: number, sectionY: number): SectionMeshResult {
+  mesh(
+    store: ColumnStore,
+    chunkX: number, chunkZ: number, sectionY: number,
+    step: LodStep = 1,
+  ): SectionMeshResult {
     for (const w of this.writers) w.reset();
     this.lightList.length = 0;
     this.hasGeometry = false;
     this.minX = this.minY = this.minZ = Number.POSITIVE_INFINITY;
     this.maxX = this.maxY = this.maxZ = Number.NEGATIVE_INFINITY;
 
-    this.gather(store, chunkX, chunkZ, sectionY);
-    this.emitCubes();
-    this.emitCrosses(chunkX, chunkZ, sectionY);
+    this.step = step;
+    this.span = SECTION_HEIGHT / step;
+    this.rs = this.span + 2;
+    this.rs2 = this.rs * this.rs;
+
+    if (step === 1) {
+      this.gather(store, chunkX, chunkZ, sectionY);
+      this.emitCubes();
+      this.emitCrosses(chunkX, chunkZ, sectionY);
+    } else {
+      this.gatherLod(store, chunkX, chunkZ, sectionY);
+      this.emitCubes();
+      // Cross-shaped plants and emissive point lights are full-detail only:
+      // at LOD range a blade of grass is well under a pixel, and the lights
+      // are already gathered from the full-detail meshes nearer the camera.
+    }
 
     const buckets: (SectionMesh | null)[] = [];
     for (let i = 0; i < Bucket.Count; i++) {
@@ -242,7 +282,7 @@ export class Mesher {
     }
 
     return {
-      chunkX, chunkZ, sectionY,
+      chunkX, chunkZ, sectionY, step,
       buckets,
       bounds: this.hasGeometry
         ? Float32Array.of(this.minX, this.minY, this.minZ, this.maxX, this.maxY, this.maxZ)
@@ -258,6 +298,9 @@ export class Mesher {
     const originZ = chunkZ * CHUNK_SIZE;
 
     const own = store.get(chunkX, chunkZ);
+
+    const R = MAX_R;
+    const R2 = MAX_R * MAX_R;
 
     for (let ry = 0; ry < R; ry++) {
       const worldY = baseY + ry - 1;
@@ -310,8 +353,97 @@ export class Mesher {
     this.light[dst] = column.light[index];
   }
 
+  /** Index into the padded region, in cells. Valid for any decimation. */
   private ri(x: number, y: number, z: number): number {
-    return (y + 1) * R2 + (z + 1) * R + (x + 1);
+    return (y + 1) * this.rs2 + (z + 1) * this.rs + (x + 1);
+  }
+
+  /**
+   * Fills the region with aggregated cells for a level-of-detail mesh.
+   *
+   * Each cell stands for `step^3` voxels. The representative is the *topmost*
+   * non-air block in the cell, because at LOD range what the eye reads is the
+   * colour of the surface seen from above — taking the most common block
+   * instead would paint grassy hills the colour of the dirt underneath them.
+   *
+   * A cell counts as solid only when at least half of it is, which keeps a
+   * single stray block from inflating a whole cell and stops distant
+   * silhouettes from growing.
+   */
+  private gatherLod(
+    store: ColumnStore, chunkX: number, chunkZ: number, sectionY: number,
+  ): void {
+    const step = this.step;
+    const rs = this.rs;
+    const cellVoxels = step * step * step;
+    const majority = cellVoxels >> 1;
+
+    const baseY = sectionY * SECTION_HEIGHT;
+    const originX = chunkX * CHUNK_SIZE;
+    const originZ = chunkZ * CHUNK_SIZE;
+
+    for (let cy = 0; cy < rs; cy++) {
+      const y0 = baseY + (cy - 1) * step;
+
+      for (let cz = 0; cz < rs; cz++) {
+        const z0 = originZ + (cz - 1) * step;
+
+        for (let cx = 0; cx < rs; cx++) {
+          const x0 = originX + (cx - 1) * step;
+          const dst = cy * this.rs2 + cz * rs + cx;
+
+          if (y0 + step <= 0) {
+            // Below bedrock: solid, so the bottom face is culled.
+            this.blocks[dst] = Block.Bedrock;
+            this.light[dst] = 0;
+            continue;
+          }
+          if (y0 >= WORLD_HEIGHT) {
+            this.blocks[dst] = Block.Air;
+            this.light[dst] = 0xf0;
+            continue;
+          }
+
+          let solidCount = 0;
+          let topBlock = Block.Air;
+          let topY = -1;
+          let maxSky = 0;
+          let maxBlockLight = 0;
+
+          for (let dy = 0; dy < step; dy++) {
+            const y = y0 + dy;
+            if (y < 0 || y >= WORLD_HEIGHT) continue;
+            for (let dz = 0; dz < step; dz++) {
+              for (let dx = 0; dx < step; dx++) {
+                const column = store.get((x0 + dx) >> 5, (z0 + dz) >> 5);
+                if (!column) continue;
+                const index = columnIndex(
+                  (x0 + dx) & CHUNK_MASK, y, (z0 + dz) & CHUNK_MASK,
+                );
+                const id = column.blocks[index];
+                const packed = column.light[index];
+
+                if (id !== Block.Air) {
+                  solidCount++;
+                  if (y > topY) {
+                    topY = y;
+                    topBlock = id;
+                  }
+                }
+                const sky = packed >> 4;
+                const blockLight = packed & 15;
+                if (sky > maxSky) maxSky = sky;
+                if (blockLight > maxBlockLight) maxBlockLight = blockLight;
+              }
+            }
+          }
+
+          const solid = solidCount > majority;
+          this.blocks[dst] = solid ? topBlock : Block.Air;
+          this.light[dst] = (maxSky << 4) | maxBlockLight;
+        }
+      }
+    }
   }
 
   private isOpaqueAt(x: number, y: number, z: number): boolean {
@@ -349,7 +481,7 @@ export class Mesher {
     const [vx, vy, vz] = basis.v;
 
     // The slice axis is whichever component of the normal is non-zero.
-    const S = SECTION_HEIGHT;
+    const S = this.span;
 
     for (let slice = 0; slice < S; slice++) {
       this.maskBlock.fill(0);
@@ -403,6 +535,23 @@ export class Mesher {
    * one face, packing them two bits (AO) and four bits (light) per corner.
    */
   private computeCorners(x: number, y: number, z: number, face: number, cell: number): void {
+    if (this.step > 1) {
+      // LOD meshes carry no per-vertex ambient occlusion and one light value
+      // per cell. That is not only cheaper to compute — it is what lets greedy
+      // meshing actually merge at distance, because the merge key collapses to
+      // block plus tint and a flat hillside becomes a handful of quads instead
+      // of hundreds.
+      const packed = this.light[this.ri(x, y, z)];
+      const sky = packed >> 4;
+      const blockLight = packed & 15;
+      this.maskAO[cell] = 0xff;                                  // ao = 3 at every corner
+      this.maskSky[cell] = sky | (sky << 4) | (sky << 8) | (sky << 12);
+      this.maskBlockLight[cell] =
+        blockLight | (blockLight << 4) | (blockLight << 8) | (blockLight << 12);
+      this.maskTint[cell] = this.tintFor(this.blocks[this.ri(x, y, z)], face);
+      return;
+    }
+
     const basis = FACE_BASIS[face];
     const [nx, ny, nz] = basis.n;
     const [ux, uy, uz] = basis.u;
@@ -481,7 +630,7 @@ export class Mesher {
     face: number, slice: number,
     basis: { n: readonly [number, number, number]; u: readonly [number, number, number]; v: readonly [number, number, number] },
   ): void {
-    const S = SECTION_HEIGHT;
+    const S = this.span;
     const [nx, ny, nz] = basis.n;
     const [ux, uy, uz] = basis.u;
     const [vx, vy, vz] = basis.v;
@@ -565,7 +714,9 @@ export class Mesher {
     // half-quad triangles.
     const drop = kind === RenderKind.Liquid && face === FACE_PY ? -2 : 0;
 
-    const P = POSITION_SCALE;
+    // Cell coordinates become block coordinates by scaling with the decimation.
+    const step = this.step;
+    const P = POSITION_SCALE * step;
     const bx = (x + ox) * P;
     const by = (y + oy) * P + drop;
     const bz = (z + oz) * P;
@@ -575,10 +726,14 @@ export class Mesher {
     const swap = FACE_SWAP_UV[face];
     const uv = (a: number, b: number): [number, number] => (swap ? [b, a] : [a, b]);
 
+    // Tile the material once per *block*, not once per cell, so texel density
+    // stays the same at every level of detail.
+    const tw = w * step;
+    const th = h * step;
     const [u0, v0] = uv(0, 0);
-    const [u1, v1] = uv(w, 0);
-    const [u2, v2] = uv(w, h);
-    const [u3, v3] = uv(0, h);
+    const [u1, v1] = uv(tw, 0);
+    const [u2, v2] = uv(tw, th);
+    const [u3, v3] = uv(0, th);
 
     const corners: Array<[number, number, number, number, number]> = [
       [bx, by, bz, u0, v0],
@@ -612,12 +767,12 @@ export class Mesher {
     }
 
     // Every basis vector has only non-negative components, so the rectangle's
-    // far corner is simply origin + u*w + v*h.
-    this.growBounds(x + ox, y + oy, z + oz);
+    // far corner is simply origin + u*w + v*h. Bounds are in blocks.
+    this.growBounds((x + ox) * step, (y + oy) * step, (z + oz) * step);
     this.growBounds(
-      x + ox + ux * w + vx * h,
-      y + oy + uy * w + vy * h,
-      z + oz + uz * w + vz * h,
+      (x + ox + ux * w + vx * h) * step,
+      (y + oy + uy * w + vy * h) * step,
+      (z + oz + uz * w + vz * h) * step,
     );
   }
 

@@ -13,6 +13,13 @@ export type CloudMode = 'off' | 'planar' | 'volumetric';
 export interface Settings {
   /** Chunks of horizontal view distance (1 chunk = 32 blocks). */
   renderDistance: number;
+
+  /** Mesh distant chunks at a coarser decimation. */
+  lodEnabled: boolean;
+  /** Beyond this many chunks a section is meshed at two blocks per cell. */
+  lodNearChunks: number;
+  /** Beyond this many chunks, at four. */
+  lodFarChunks: number;
   /** Backbuffer scale. The single strongest perf lever on an iGPU. */
   resolutionScale: number;
   fovDegrees: number;
@@ -73,6 +80,9 @@ export interface Settings {
 
 const BASE: Settings = {
   renderDistance: 8,
+  lodEnabled: true,
+  lodNearChunks: 5,
+  lodFarChunks: 7,
   resolutionScale: 1.0,
   fovDegrees: 75,
 
@@ -118,6 +128,8 @@ const BASE: Settings = {
 const OVERRIDES: Record<PresetName, Partial<Settings>> = {
   low: {
     renderDistance: 5,
+    lodNearChunks: 3,
+    lodFarChunks: 4,
     resolutionScale: 0.7,
     shadowCascades: 2,
     shadowMapSize: 1024,
@@ -142,6 +154,8 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
   },
   medium: {
     renderDistance: 7,
+    lodNearChunks: 4,
+    lodFarChunks: 6,
     resolutionScale: 0.85,
     shadowCascades: 3,
     shadowMapSize: 1024,
@@ -164,6 +178,8 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
   },
   ultra: {
     renderDistance: 12,
+    lodNearChunks: 7,
+    lodFarChunks: 10,
     resolutionScale: 1.0,
     shadowCascades: 4,
     shadowMapSize: 2048,

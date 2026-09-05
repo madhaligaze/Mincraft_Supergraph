@@ -23,7 +23,7 @@ import {
 } from './storage.ts';
 import { ChunkPipeline } from './pipeline.ts';
 import { TerrainGenerator } from './generator.ts';
-import type { SectionMeshResult } from './mesher.ts';
+import type { SectionMeshResult, LodStep } from './mesher.ts';
 import type { WorkerRequest, WorkerResponse } from './chunkWorker.ts';
 import { Block, BLOCK_FLAGS, BlockFlag, isOpaque, growsGrass, BLOCK_LIGHT } from './blocks.ts';
 import { BIOMES, BIOME_WATER_RGB } from './biomes.ts';
@@ -47,6 +47,8 @@ interface ColumnState {
   atlasUploaded: boolean;
   /** Squared distance from the camera in chunks, refreshed each update. */
   priority: number;
+  /** Decimation this column's meshes are being built at. */
+  lodStep: LodStep;
 }
 
 /** Where finished chunk data goes. Implemented by the renderer. */
@@ -76,6 +78,7 @@ interface Job {
   cz: number;
   sectionY: number;
   priority: number;
+  step: LodStep;
 }
 
 /** Result of a voxel raycast. */
@@ -110,6 +113,35 @@ export class World {
   private queueDirty = true;
 
   renderDistance = 8;
+  lodEnabled = true;
+  /** Chunk distance past which sections are meshed two blocks per cell. */
+  lodNearChunks = 5;
+  /** Chunk distance past which sections are meshed four blocks per cell. */
+  lodFarChunks = 7;
+
+  /**
+   * Picks a decimation for a column, moving at most one level at a time and
+   * only once the distance is clear of the threshold by a margin.
+   *
+   * Without that margin a player walking back and forth across a boundary
+   * would make the column re-mesh every few frames, and the visible pop
+   * between levels would flicker continuously.
+   */
+  private lodStepFor(distanceChunks: number, current: LodStep): LodStep {
+    if (!this.lodEnabled) return 1;
+
+    const near = this.lodNearChunks;
+    const far = Math.max(this.lodFarChunks, near + 1);
+    const margin = 0.14;
+
+    if (current === 1) return distanceChunks > near * (1 + margin) ? 2 : 1;
+    if (current === 2) {
+      if (distanceChunks < near * (1 - margin)) return 1;
+      if (distanceChunks > far * (1 + margin)) return 4;
+      return 2;
+    }
+    return distanceChunks < far * (1 - margin) ? 2 : 4;
+  }
   /** Columns are kept this many rings beyond the render distance. */
   private readonly loadMargin = 2;
 
@@ -279,9 +311,12 @@ export class World {
             pendingSections: 0,
             atlasUploaded: false,
             priority: dx * dx + dz * dz,
+            lodStep: 1,
           });
           newHandles.push(handleOf(column));
           this.queueDirty = true;
+          // The state was created with a placeholder level; `rebuildQueue`
+          // assigns the real one on the next pass.
         }
       }
     }
@@ -344,14 +379,16 @@ export class World {
 
       if (state.stage === Stage.Empty) {
         this.jobQueue.push({
-          kind: 'generate', cx: column.x, cz: column.z, sectionY: 0, priority: state.priority,
+          kind: 'generate', cx: column.x, cz: column.z, sectionY: 0,
+          priority: state.priority, step: 1,
         });
         continue;
       }
 
       if (state.stage === Stage.Generated && this.neighbourhoodAtLeast(column.x, column.z, Stage.Generated)) {
         this.jobQueue.push({
-          kind: 'light', cx: column.x, cz: column.z, sectionY: 0, priority: state.priority,
+          kind: 'light', cx: column.x, cz: column.z, sectionY: 0,
+          priority: state.priority, step: 1,
         });
         continue;
       }
@@ -360,13 +397,21 @@ export class World {
       if (Math.max(Math.abs(dx), Math.abs(dz)) > meshRadius) continue;
       if (!this.neighbourhoodAtLeast(column.x, column.z, Stage.Lit)) continue;
 
+      // A change of detail level invalidates every section of the column.
+      const desired = this.lodStepFor(Math.sqrt(state.priority), state.lodStep);
+      if (desired !== state.lodStep) {
+        state.lodStep = desired;
+        state.dirtySections = (1 << SECTION_COUNT) - 1;
+      }
+
       const todo = state.dirtySections & ~state.pendingSections;
       if (todo === 0) continue;
 
       for (let sy = 0; sy < SECTION_COUNT; sy++) {
         if ((todo & (1 << sy)) === 0) continue;
         this.jobQueue.push({
-          kind: 'mesh', cx: column.x, cz: column.z, sectionY: sy, priority: state.priority,
+          kind: 'mesh', cx: column.x, cz: column.z, sectionY: sy,
+          priority: state.priority, step: state.lodStep,
         });
       }
     }
@@ -413,7 +458,7 @@ export class World {
       this.markJobStarted(job);
 
       const message: WorkerRequest = job.kind === 'mesh'
-        ? { type: 'mesh', id, cx: job.cx, cz: job.cz, sectionY: job.sectionY }
+        ? { type: 'mesh', id, cx: job.cx, cz: job.cz, sectionY: job.sectionY, step: job.step }
         : job.kind === 'light'
           ? { type: 'light', id, cx: job.cx, cz: job.cz }
           : { type: 'generate', id, cx: job.cx, cz: job.cz };
@@ -504,7 +549,13 @@ export class World {
     if (!state) return;
 
     state.pendingSections &= ~(1 << sectionY);
-    state.dirtySections &= ~(1 << sectionY);
+
+    // A result built at a level the column has since moved away from is stale.
+    // Its geometry is still valid to show — better than a hole — but the
+    // section must stay dirty so the correct level replaces it.
+    if (!result || result.step === state.lodStep) {
+      state.dirtySections &= ~(1 << sectionY);
+    }
 
     if (!result) return;
 
@@ -542,7 +593,9 @@ export class World {
       } else {
         const state = this.states.get(chunkKey(job.cx, job.cz));
         if (state) state.pendingSections |= 1 << job.sectionY;
-        const result = pipeline.mesh(this.store, job.cx, job.cz, job.sectionY);
+        const result = pipeline.mesh(
+          this.store, job.cx, job.cz, job.sectionY, job.step,
+        );
         this.onMeshed(job.cx, job.cz, job.sectionY, result);
       }
     }

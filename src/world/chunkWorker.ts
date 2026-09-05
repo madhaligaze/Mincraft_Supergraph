@@ -10,7 +10,7 @@
 
 import { ChunkPipeline } from './pipeline.ts';
 import { ColumnData, ColumnStore, type ColumnHandle } from './storage.ts';
-import type { SectionMeshResult } from './mesher.ts';
+import type { SectionMeshResult, LodStep } from './mesher.ts';
 
 export type WorkerRequest =
   | { type: 'init'; seed: number }
@@ -18,7 +18,7 @@ export type WorkerRequest =
   | { type: 'unregister'; columns: Array<{ x: number; z: number }> }
   | { type: 'generate'; id: number; cx: number; cz: number }
   | { type: 'light'; id: number; cx: number; cz: number }
-  | { type: 'mesh'; id: number; cx: number; cz: number; sectionY: number };
+  | { type: 'mesh'; id: number; cx: number; cz: number; sectionY: number; step: LodStep };
 
 export type WorkerResponse =
   | { type: 'ready' }
@@ -97,7 +97,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
       const column = store.get(message.cx, message.cz);
       if (column) ensureFlags(column, true, true);
 
-      const result = pipeline.mesh(store, message.cx, message.cz, message.sectionY);
+      const result = pipeline.mesh(
+        store, message.cx, message.cz, message.sectionY, message.step,
+      );
 
       const transfers: Transferable[] = [];
       if (result) {
