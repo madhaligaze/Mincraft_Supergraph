@@ -6,6 +6,12 @@ dist/
 # needs out of one into public/pack/, which is what gets committed.
 *.zip
 
+# Sound effects extracted from a local Minecraft install. Unlike the texture
+# pack, this is Mojang's own content, so it stays on the machine that extracted
+# it: `node scripts/extract-sounds.mjs` regenerates it in seconds, and without
+# it the engine synthesises its sound instead.
+public/sounds/
+
 # Measurement and screenshot output. Regenerate with the scripts in scripts/;
 # checking them in would put a few megabytes of PNG into every diff.
 scripts/gallery/

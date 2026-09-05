@@ -259,6 +259,9 @@ export class Hud {
     this.addSlider('Дальность травы', 'grassDistance', 12, 80, 4, (v) => `${v} бл.`);
     this.addSlider('Плотность травы', 'grassDensity', 0.25, 2, 0.25, (v) => `${v}x`);
 
+    this.addSectionTitle('Звук');
+    this.addSlider('Громкость', 'audioVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`);
+
     this.addSectionTitle('Пост-обработка');
     this.addToggle('TAA', 'taaEnabled');
     this.addToggle('Bloom', 'bloomEnabled');

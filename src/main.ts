@@ -9,6 +9,7 @@ import { Renderer, type FrameState } from './render/renderer.ts';
 import { World } from './world/world.ts';
 import { Player } from './player/player.ts';
 import { Input } from './core/input.ts';
+import { AudioEngine } from './audio/audio.ts';
 import { Hud, facingLabel } from './ui/hud.ts';
 import {
   loadSettings, saveSettings, presetSettings, type PresetName, type Settings,
@@ -132,6 +133,8 @@ async function boot(): Promise<void> {
   const spawn = world.findSpawn();
   player.setPosition(spawn.x, spawn.y, spawn.z);
 
+  const audio = new AudioEngine();
+
   const hud = new Hud(settings, preset, {
     onSettingsChange(next, nextPreset) {
       settings = next;
@@ -139,6 +142,7 @@ async function boot(): Promise<void> {
       saveSettings(preset, settings);
       applyWorldSettings();
       renderer.applySettings(settings);
+      audio.setVolume(settings.audioVolume);
       world.invalidateAtlases();
       resize();
     },
@@ -189,7 +193,7 @@ async function boot(): Promise<void> {
   // Debug handle: lets the smoke test (and the console) drive the game without
   // pointer lock, which headless Chrome cannot grant.
   (window as unknown as Record<string, unknown>).supergraph = {
-    player, world, renderer, hud,
+    player, world, renderer, hud, audio,
     teleport(x: number, y: number, z: number) { player.setPosition(x, y, z); },
     look(yaw: number, pitch: number) { player.yaw = yaw; player.pitch = pitch; },
     /** 0..1 through the day; 0.25 sunrise, 0.5 noon, 0.75 sunset. */
@@ -359,6 +363,9 @@ async function boot(): Promise<void> {
     input.requestLock();
     running = true;
     lastTime = performance.now();
+    // A browser will not start an audio context outside a user gesture, and
+    // this click is the only one the game is guaranteed to get.
+    void audio.start(settings.audioVolume);
   });
 
   document.addEventListener('pointerlockchange', () => {
@@ -367,8 +374,51 @@ async function boot(): Promise<void> {
       playButton.textContent = 'Продолжить';
       hud.setPlaying(false);
       running = false;
+      void audio.suspend();
     }
   });
+
+  /**
+   * Footsteps, landings and ambience.
+   *
+   * All of it is derived from state the engine already keeps: the block under
+   * the player's feet, the same wetness the shaders use to darken the ground,
+   * the same wind value that bends the grass, and the baked skylight at head
+   * height — which is what tells the difference between standing in a field
+   * and standing in a cave without asking any new question of the world.
+   */
+  function updateAudio(dt: number, previousX: number, previousZ: number): void {
+    if (!audio.running) return;
+
+    const px = player.position[0];
+    const py = player.position[1];
+    const pz = player.position[2];
+    const feetX = Math.floor(px);
+    const feetZ = Math.floor(pz);
+
+    const ground = world.getBlock(feetX, Math.floor(py - 0.05), feetZ);
+    const wetness = renderer.sky.weather.wetness;
+
+    const impact = player.takeLandingImpact();
+    if (impact > 0) {
+      audio.land(impact, ground, wetness);
+    } else if (player.onGround && !player.flying) {
+      audio.walk(Math.hypot(px - previousX, pz - previousZ), ground, wetness);
+    }
+
+    const eye = player.camera.position;
+    const head = world.getBlock(
+      Math.floor(eye[0]), Math.floor(eye[1]), Math.floor(eye[2]),
+    );
+    const light = world.store.getLight(feetX, Math.floor(py) + 1, feetZ);
+
+    audio.update(dt, {
+      rain: renderer.sky.weather.rain,
+      wind: renderer.sky.weather.wind,
+      skyVisibility: (light >> 4) / 15,
+      underwater: head === Block.Water,
+    });
+  }
 
   function tick(now: number): void {
     requestAnimationFrame(tick);
@@ -389,10 +439,18 @@ async function boot(): Promise<void> {
     // stays visible behind the pause overlay instead of the view snapping back
     // to the origin.
     elapsed += running ? dt : 0;
+    const beforeX = player.position[0];
+    const beforeZ = player.position[2];
     player.update(running ? dt : 0, settings.fovDegrees);
     if (running) {
-      if (player.interact()) lightRefreshTimer = 0;
+      const event = player.interact();
+      if (event) {
+        lightRefreshTimer = 0;
+        if (event.kind === 'break') audio.dig(event.block);
+        else audio.place(event.block);
+      }
       hud.setHotbarIndex(player.hotbarIndex);
+      updateAudio(dt, beforeX, beforeZ);
     }
 
     renderer.sky.update(running ? dt : 0);

@@ -371,6 +371,59 @@ for (const d of DEFS) {
   BLOCK_FACE_TEX[base + FACE_NZ] = textureIndex(side);
 }
 
+// ---------------------------------------------------------------------------
+// Sound
+// ---------------------------------------------------------------------------
+
+/**
+ * Families of footstep and break sound.
+ *
+ * Named after the sets Minecraft ships, because that is what
+ * `scripts/extract-sounds.mjs` pulls in and what a player expects a given block
+ * to sound like. With nothing extracted the audio engine synthesises each
+ * family instead, from the same names.
+ */
+export const SOUND_FAMILIES = [
+  'stone', 'grass', 'gravel', 'sand', 'snow', 'wood', 'cloth', 'glass', 'water', 'lava',
+] as const;
+
+export type SoundFamily = (typeof SOUND_FAMILIES)[number];
+
+/** Only the exceptions; everything else is stone, which most of a world is. */
+const SOUND_OVERRIDES: Partial<Record<Block, SoundFamily>> = {
+  [Block.Dirt]: 'grass',
+  [Block.GrassBlock]: 'grass',
+  [Block.Podzol]: 'grass',
+  [Block.Sand]: 'sand',
+  [Block.RedSand]: 'sand',
+  [Block.Gravel]: 'gravel',
+  [Block.Clay]: 'gravel',
+  [Block.SnowBlock]: 'snow',
+  [Block.OakLog]: 'wood',
+  [Block.BirchLog]: 'wood',
+  [Block.SpruceLog]: 'wood',
+  [Block.OakPlanks]: 'wood',
+  [Block.OakLeaves]: 'grass',
+  [Block.BirchLeaves]: 'grass',
+  [Block.SpruceLeaves]: 'grass',
+  [Block.Glass]: 'glass',
+  [Block.Water]: 'water',
+  [Block.Lava]: 'lava',
+  [Block.TallGrass]: 'grass',
+  [Block.Fern]: 'grass',
+  [Block.FlowerRed]: 'grass',
+  [Block.FlowerYellow]: 'grass',
+  [Block.FlowerBlue]: 'grass',
+  [Block.DeadBush]: 'grass',
+  [Block.Cactus]: 'cloth',
+};
+
+/** Index into `SOUND_FAMILIES` per block id. */
+export const BLOCK_SOUND = new Uint8Array(Block.Count);
+for (const [id, family] of Object.entries(SOUND_OVERRIDES)) {
+  BLOCK_SOUND[Number(id)] = SOUND_FAMILIES.indexOf(family as SoundFamily);
+}
+
 // --- predicates (inlined by the JIT; keep them tiny) ---
 
 export const isAir = (id: number): boolean => id === Block.Air;

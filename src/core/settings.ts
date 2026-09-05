@@ -88,6 +88,9 @@ export interface Settings {
   /** Texture tile resolution for the procedurally generated material array. */
   textureResolution: number;
   anisotropy: number;
+
+  /** Master volume, 0..1. Costs no frame time; it lives here to be persisted. */
+  audioVolume: number;
 }
 
 const BASE: Settings = {
@@ -141,6 +144,8 @@ const BASE: Settings = {
 
   textureResolution: 128,
   anisotropy: 4,
+
+  audioVolume: 0.7,
 };
 
 const OVERRIDES: Record<PresetName, Partial<Settings>> = {

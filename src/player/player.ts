@@ -37,6 +37,16 @@ const AIR_FRICTION = 0.6;
 
 const REACH = 6.0;
 
+/** What an interaction did to the world, for the caller to react to. */
+export interface BlockEvent {
+  kind: 'break' | 'place';
+  /** The block that was broken, or the one that was placed. */
+  block: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface PlayerCamera {
   position: Vec3;
   forward: Vec3;
@@ -370,14 +380,16 @@ export class Player {
     );
   }
 
-  /** Handles break and place. Returns true when the world changed. */
-  interact(): boolean {
+  /** Handles break and place. Returns what happened, for the audio and light. */
+  interact(): BlockEvent | null {
     const hit = this.pick();
-    if (!hit) return false;
+    if (!hit) return null;
 
     if (this.input.wasButtonPressed(0)) {
-      if (hit.block === Block.Bedrock) return false;
-      return this.world.setBlock(hit.x, hit.y, hit.z, Block.Air);
+      if (hit.block === Block.Bedrock) return null;
+      return this.world.setBlock(hit.x, hit.y, hit.z, Block.Air)
+        ? { kind: 'break', block: hit.block, x: hit.x, y: hit.y, z: hit.z }
+        : null;
     }
 
     if (this.input.wasButtonPressed(2)) {
@@ -397,11 +409,13 @@ export class Player {
         (BLOCK_FLAGS[target] & BlockFlag.Passable) !== 0;
 
       if (!overlapsPlayer && replaceable) {
-        return this.world.setBlock(x, y, z, this.selectedBlock);
+        return this.world.setBlock(x, y, z, this.selectedBlock)
+          ? { kind: 'place', block: this.selectedBlock, x, y, z }
+          : null;
       }
     }
 
-    return false;
+    return null;
   }
 
   /** Impact speed of the last landing, consumed by the HUD/audio. */
