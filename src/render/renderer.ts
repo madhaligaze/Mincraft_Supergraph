@@ -49,6 +49,24 @@ const SCENE_FLOATS = 120;
 
 const MAX_POINT_LIGHTS = 16;
 
+/**
+ * Flat colour per bucket for debug view 8.
+ *
+ * Which pass actually painted a pixel is not something the other debug channels
+ * can answer: they all show what the *chunk* shader computed, so a pixel that
+ * came from water or from instanced grass looks like an oddly shaded block
+ * face. Painting each pass a solid colour answers it in one screenshot.
+ */
+const BUCKET_DEBUG_COLOR: ReadonlyArray<readonly [number, number, number]> = [
+  [0.20, 0.80, 0.35],   // opaque
+  [0.95, 0.85, 0.20],   // cutout
+  [0.95, 0.25, 0.20],   // water
+  [0.30, 0.55, 1.00],   // translucent
+];
+
+/** Instanced grass is not a bucket, but it paints pixels the same way. */
+const GRASS_DEBUG_COLOR: readonly [number, number, number] = [1.0, 0.35, 0.9];
+
 export interface FrameState {
   cameraPosition: Vec3;
   cameraForward: Vec3;
@@ -193,7 +211,16 @@ export class Renderer implements MeshSink {
       USE_SSAO: s.ssaoEnabled,
     };
 
-    this.programs.create('chunk.opaque', 'chunk/chunk.vert.glsl', 'chunk/chunk.frag.glsl', chunkDefines);
+    // Parallax goes on the opaque bucket only. Cutout geometry is cross-shaped
+    // plants and leaf shells, where the face is a two-sided billboard with no
+    // relief to march, and the translucent bucket is glass and ice, which are
+    // flat by construction.
+    this.programs.create('chunk.opaque', 'chunk/chunk.vert.glsl', 'chunk/chunk.frag.glsl', {
+      ...chunkDefines,
+      USE_POM: s.parallaxEnabled,
+      POM_STEPS: Math.max(4, s.parallaxSteps),
+      POM_SHADOW: s.parallaxEnabled && s.parallaxShadows,
+    });
     this.programs.create('chunk.cutout', 'chunk/chunk.vert.glsl', 'chunk/chunk.frag.glsl', {
       ...chunkDefines, ALPHA_TEST: true, FOLIAGE: true,
     });
@@ -439,7 +466,10 @@ export class Renderer implements MeshSink {
       previous.ssaoEnabled !== settings.ssaoEnabled ||
       previous.ssaoSamples !== settings.ssaoSamples ||
       previous.cloudSteps !== settings.cloudSteps ||
-      previous.skyViewSteps !== settings.skyViewSteps;
+      previous.skyViewSteps !== settings.skyViewSteps ||
+      previous.parallaxEnabled !== settings.parallaxEnabled ||
+      previous.parallaxSteps !== settings.parallaxSteps ||
+      previous.parallaxShadows !== settings.parallaxShadows;
 
     if (needsPrograms) {
       // Programs are cheap to rebuild and this only happens from the settings
@@ -812,6 +842,12 @@ export class Renderer implements MeshSink {
 
   private drawBucket(program: Program, bucket: Bucket): void {
     const gl = this.gl;
+    // Debug view 8 paints each bucket a flat colour, which is the fastest way
+    // to find out which pass actually put a pixel on screen.
+    if (this.debugView === 8) {
+      const c = BUCKET_DEBUG_COLOR[bucket] ?? [1, 1, 1];
+      program.vec3('uDebugBucket', c[0], c[1], c[2]);
+    }
     for (const item of this.geometry.list(bucket)) {
       program.vec3(
         'uChunkOrigin',
@@ -896,6 +932,12 @@ export class Renderer implements MeshSink {
     program.int('uShadowMap', 6);
 
     program.float('uTextureSize', this.materials.size);
+    // Relief depth in blocks, and the reciprocal of the distance it fades over.
+    program.vec2(
+      'uParallaxParams',
+      this.settings.parallaxDepth,
+      1 / Math.max(1, this.settings.parallaxDistance),
+    );
     program.vec2('uTintParams', 1 / this.tintAtlasSize, this.tintAtlasSize);
     program.float('uCameraRadiusKm', this.sky.cameraRadiusKm);
     program.vec2('uHorizonAngles', this.sky.horizonAngles[0], this.sky.horizonAngles[1]);
@@ -1000,6 +1042,8 @@ export class Renderer implements MeshSink {
     program.float('uSeaLevel', SEA_LEVEL);
     program.int('uGridSize', gridSize);
     program.int('uBladesPerCell', bladesPerCell);
+    program.int('uDebugView', this.debugView);
+    program.vec3('uDebugBucket', ...GRASS_DEBUG_COLOR);
     program.float('uGrassDistance', s.grassDistance);
     program.float('uBladeHeight', 0.42);
     program.float('uBladeWidth', 0.024);

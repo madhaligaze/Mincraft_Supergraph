@@ -13,7 +13,9 @@
  */
 
 import { TEXTURES, type TextureName } from '../world/blocks.ts';
-import { loadPackMeta, loadPackMaterial, type PackedMaterial } from './packLoader.ts';
+import {
+  loadPackMeta, loadPackMaterial, normalizeHeight, type PackedMaterial,
+} from './packLoader.ts';
 
 // ---------------------------------------------------------------------------
 // Tileable noise primitives
@@ -677,6 +679,18 @@ const PROCEDURAL_F0: Partial<Record<TextureName, number>> = {
 };
 
 /**
+ * How much light passes through a material, 0..1, for the LabPBR subsurface
+ * channel. Thin plant matter is the whole point of it: a leaf lit from behind
+ * glows, a stone does not.
+ */
+const PROCEDURAL_SUBSURFACE: Partial<Record<TextureName, number>> = {
+  oak_leaves: 0.75, birch_leaves: 0.8, spruce_leaves: 0.6,
+  tall_grass: 0.85, fern: 0.85, dead_bush: 0.5,
+  flower_red: 0.7, flower_yellow: 0.7, flower_blue: 0.7,
+  cactus_side: 0.3, cactus_top: 0.3,
+};
+
+/**
  * Bakes one material to CPU arrays. Used by the material contact-sheet page,
  * and by `generateMaterials` itself, so what the sheet shows is exactly what
  * the GPU receives.
@@ -712,12 +726,22 @@ export function bakeMaterial(
   // Keeping it is what makes parallax possible without a pack.
   const emission = Math.round((PROCEDURAL_EMISSION[name] ?? 0) * 255);
   const f0 = PROCEDURAL_F0[name] ?? 10;
+  // LabPBR splits this one channel: 0..64 is porosity, 65..255 subsurface
+  // scattering. The procedural set only has an opinion about the upper half.
+  const sss = PROCEDURAL_SUBSURFACE[name];
+  const scattering = sss === undefined ? 0 : 65 + Math.round(sss * 190);
   for (let p = 0; p < size * size; p++) {
     material[p * 4] = Math.round(clamp01(scratch[p * CH + 4]) * 255);
     material[p * 4 + 1] = f0;
-    material[p * 4 + 2] = 0;
+    material[p * 4 + 2] = scattering;
     material[p * 4 + 3] = emission;
   }
+
+  // Each material function writes its height field at whatever amplitude suited
+  // its normals — that is what `NORMAL_STRENGTH` exists to compensate for. The
+  // parallax march needs the shape, not that amplitude, so it gets the same
+  // normalisation a pack's height field does.
+  normalizeHeight(material);
 
   return { albedo, surface, material };
 }

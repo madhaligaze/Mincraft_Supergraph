@@ -35,6 +35,10 @@ uniform int uSsrSteps;
 uniform float uSsrDistance;
 uniform float uRefractionStrength;
 
+/** Debug view 8 paints every pass a flat colour; see renderer.ts. */
+uniform int uDebugView;
+uniform vec3 uDebugBucket;
+
 #ifndef SHADOW_QUALITY
 #define SHADOW_QUALITY 2
 #endif
@@ -142,6 +146,11 @@ bool traceReflection(vec3 origin, vec3 dir, out vec3 hitColor, out float confide
 }
 
 void main() {
+  if (uDebugView == 8) {
+    fragColor = vec4(uDebugBucket, 1.0);
+    return;
+  }
+
   vec2 screenUv = gl_FragCoord.xy * uScreen.zw;
 
   vec3 toCamera = uCameraPos.xyz - vWorldPos;

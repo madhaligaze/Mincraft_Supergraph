@@ -32,6 +32,16 @@ const CASE_SETS = {
     { name: 'half res', changes: { resolutionScale: 0.6 } },
     { name: 'rd 4', changes: { renderDistance: 4 } },
   ],
+  // Parallax is the one effect whose cost is bounded by distance rather than
+  // by geometry, so the range case matters as much as the step count.
+  parallax: [
+    { name: 'no pom', changes: { parallaxEnabled: false } },
+    { name: 'pom 4 steps', changes: { parallaxSteps: 4 } },
+    { name: 'pom 16 steps', changes: { parallaxSteps: 16 } },
+    { name: 'pom 32 steps', changes: { parallaxSteps: 32 } },
+    { name: 'pom + selfshadow', changes: { parallaxShadows: true } },
+    { name: 'pom range 8', changes: { parallaxDistance: 8 } },
+  ],
   // Splits the shadow cost into "drawing the maps" (cascades, size) versus
   // "sampling them" (filter taps).
   shadows: [

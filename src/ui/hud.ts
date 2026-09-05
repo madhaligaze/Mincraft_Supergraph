@@ -241,6 +241,13 @@ export class Hud {
     this.addSlider('Качество фильтра', 'shadowFilter', 1, 3, 1, (v) => String(v));
     this.addToggle('SSAO', 'ssaoEnabled');
 
+    this.addSectionTitle('Рельеф поверхности');
+    this.addToggle('Параллакс', 'parallaxEnabled');
+    this.addSlider('Шаги параллакса', 'parallaxSteps', 4, 48, 4, (v) => String(v));
+    this.addSlider('Глубина рельефа', 'parallaxDepth', 0.02, 0.14, 0.01, (v) => v.toFixed(2));
+    this.addSlider('Дальность рельефа', 'parallaxDistance', 6, 40, 2, (v) => `${v} бл.`);
+    this.addToggle('Самозатенение рельефа', 'parallaxShadows');
+
     this.addSectionTitle('Небо и вода');
     this.addSlider('Шаги неба', 'skyViewSteps', 8, 48, 4, (v) => String(v));
     this.addSlider('Шаги облаков', 'cloudSteps', 0, 64, 4, (v) => (v === 0 ? 'выкл' : String(v)));

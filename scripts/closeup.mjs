@@ -1,32 +1,25 @@
 /**
- * Dumps the chunk shader's debug channels from one fixed camera.
+ * Close-up A/B screenshot, for effects that only exist near the camera.
  *
- * Usage: node scripts/debugview.mjs <url> [outPrefix] [x y w h]
+ * `diag.mjs` frames a landscape, which is the wrong shot for parallax, wetness
+ * or texture work: those live in the first few blocks in front of the player.
+ * This one looks down at the ground at a grazing angle instead, which is where
+ * relief reads strongest.
  *
- * The optional rectangle crops every channel to the same region, which is how
- * you compare an artefact across channels: a 40-pixel triangle is invisible in
- * a 1280x720 dump and obvious in a 300x200 one.
+ * Usage: node scripts/closeup.mjs <url> <settingKey> <valueA> <valueB> [prefix] [pitch]
  */
 
 import { launch } from 'puppeteer-core';
 import { existsSync, writeFileSync } from 'node:fs';
 
-const [, , url, prefix = 'scripts/dbg', cx, cy, cw, ch] = process.argv;
-
-const clip = cw !== undefined
-  ? { x: Number(cx), y: Number(cy), width: Number(cw), height: Number(ch) }
-  : undefined;
-
-const VIEWS = [
-  [0, 'shaded'], [1, 'vertexAO'], [2, 'skylight'],
-  [4, 'normal'], [5, 'ssao'], [6, 'albedo'], [7, 'tint'],
-  [8, 'bucket'], [10, 'height'],
-];
+const [, , url, key, valueA, valueB, prefix = 'scripts/closeup', pitch = '-0.55'] = process.argv;
 
 const CHROME = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
 ].find((p) => existsSync(p));
+
+const parse = (v) => (v === 'true' ? true : v === 'false' ? false : Number.isNaN(Number(v)) ? v : Number(v));
 
 const browser = await launch({
   executablePath: CHROME,
@@ -49,19 +42,20 @@ await page.waitForFunction(
 await page.evaluate(() => document.getElementById('overlay')?.setAttribute('hidden', ''));
 await new Promise((r) => setTimeout(r, 22000));
 
-await page.evaluate(() => {
+// A low sun rakes across the relief; overhead light flattens it.
+await page.evaluate((p) => {
   const api = window.supergraph;
   api.findViewpoint(48);
-  api.setTime(0.5);
-  api.faceSun(2.2, -0.22);
-});
+  api.setTime(0.29);
+  api.faceSun(1.9, p);
+}, Number(pitch));
 await new Promise((r) => setTimeout(r, 12000));
 
-for (const [mode, name] of VIEWS) {
-  await page.evaluate((m) => window.supergraph.setDebugView(m), mode);
-  await new Promise((r) => setTimeout(r, 5000));
-  const file = `${prefix}-${name}.png`;
-  writeFileSync(file, await page.screenshot({ type: 'png', clip }));
+for (const value of [valueA, valueB]) {
+  await page.evaluate((k, v) => window.supergraph.setSetting(k, v), key, parse(value));
+  await new Promise((r) => setTimeout(r, 14000));
+  const file = `${prefix}-${key}-${value}.png`;
+  writeFileSync(file, await page.screenshot({ type: 'png' }));
   console.log(`shot: ${file}`);
 }
 

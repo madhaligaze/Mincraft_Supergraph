@@ -22,10 +22,19 @@ in float vFade;
 in float vSkyLight;
 flat in vec3 vNormal;
 
+/** Debug view 8 paints every pass a flat colour; see renderer.ts. */
+uniform int uDebugView;
+uniform vec3 uDebugBucket;
+
 out vec4 fragColor;
 
 void main() {
   if (vFade <= 0.004) discard;
+
+  if (uDebugView == 8) {
+    fragColor = vec4(uDebugBucket, 1.0);
+    return;
+  }
 
   vec3 toCamera = uCameraPos.xyz - vWorldPos;
   float viewDistance = length(toCamera);

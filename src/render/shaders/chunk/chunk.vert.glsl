@@ -10,7 +10,8 @@ flat out float vTexLayer;
 // The face basis is constant across a quad, so it travels as flat varyings
 // rather than being re-derived from an index in the fragment shader.
 flat out vec3 vFaceNormal;
-flat out vec3 vFaceTangent;
+/** xyz = texture U axis in world space, w = UV handedness. */
+flat out vec4 vFaceTangent;
 
 void main() {
   ChunkVertex v = decodeChunkVertex();
@@ -25,7 +26,7 @@ void main() {
   vUv = v.uv;
   vTexLayer = float(v.texLayer);
   vFaceNormal = FACE_NORMAL[v.face];
-  vFaceTangent = FACE_TANGENT[v.face];
+  vFaceTangent = vec4(FACE_TEX_U[v.face], FACE_UV_SIGN[v.face]);
   vTint = vertexTint(v.tintMode, worldPos.xz);
   vLightAO = vec3(v.skyLight, v.blockLight, v.ao);
 

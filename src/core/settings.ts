@@ -33,6 +33,18 @@ export interface Settings {
   /** 1 = 3x3 PCF, 2 = 5x5 rotated Poisson, 3 = 5x5 + normal-offset slope bias. */
   shadowFilter: number;
 
+  // Parallax occlusion mapping: relief inside the block face, marched against
+  // the height field the material array already carries.
+  parallaxEnabled: boolean;
+  /** March steps at full strength; scales down with distance and view angle. */
+  parallaxSteps: number;
+  /** Depth of the relief, in blocks. Past ~0.1 the flat silhouette shows. */
+  parallaxDepth: number;
+  /** Blocks beyond which the face is flat again. */
+  parallaxDistance: number;
+  /** A second march towards the sun, so the relief shadows itself. */
+  parallaxShadows: boolean;
+
   // Ambient occlusion (screen space, on top of the baked per-vertex AO)
   ssaoEnabled: boolean;
   /** Fraction of the render target the AO buffer runs at. */
@@ -92,6 +104,12 @@ const BASE: Settings = {
   shadowDistance: 160,
   shadowFilter: 2,
 
+  parallaxEnabled: true,
+  parallaxSteps: 12,
+  parallaxDepth: 0.07,
+  parallaxDistance: 18,
+  parallaxShadows: false,
+
   ssaoEnabled: true,
   ssaoScale: 0.5,
   ssaoSamples: 12,
@@ -135,6 +153,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     shadowMapSize: 1024,
     shadowDistance: 72,
     shadowFilter: 1,
+    parallaxEnabled: false,
     ssaoEnabled: false,
     skyViewSteps: 12,
     aerialPerspective: false,
@@ -161,6 +180,9 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     shadowMapSize: 1024,
     shadowDistance: 128,
     shadowFilter: 2,
+    parallaxSteps: 8,
+    parallaxDepth: 0.06,
+    parallaxDistance: 14,
     ssaoScale: 0.5,
     ssaoSamples: 8,
     skyViewSteps: 16,
@@ -185,6 +207,10 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     shadowMapSize: 2048,
     shadowDistance: 256,
     shadowFilter: 3,
+    parallaxSteps: 32,
+    parallaxDepth: 0.09,
+    parallaxDistance: 28,
+    parallaxShadows: true,
     ssaoScale: 1.0,
     ssaoSamples: 16,
     skyViewSteps: 40,

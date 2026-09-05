@@ -44,6 +44,41 @@ export interface PackedMaterial {
 
 const PACK_ROOT = 'pack';
 
+/**
+ * Stretches a height field to the full 0..1 range, in place, over the R
+ * channel of an RGBA byte array.
+ *
+ * Packs are wildly inconsistent here. Roundista, for one, ships every material
+ * inside 245..255 — four per cent of the range — which is enough to derive a
+ * normal from but leaves parallax with nothing to march against. Stretching
+ * recovers the shape the author drew; what it cannot recover is the relative
+ * depth between materials, because a pack that compressed everything into ten
+ * levels has already thrown that away.
+ *
+ * Two guards. A field flatter than a few levels is not compressed relief, it
+ * is a pack that never authored height at all, and amplifying it would turn
+ * dither noise into a rock face — those stay flat, which makes parallax a
+ * no-op for them. And the gain is capped, so a nearly flat field cannot be
+ * blown up past what its quantisation can carry.
+ */
+export function normalizeHeight(rgba: Uint8Array): void {
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    const h = rgba[i];
+    if (h < min) min = h;
+    if (h > max) max = h;
+  }
+
+  const span = max - min;
+  if (span < 4) return;
+
+  const gain = Math.min(255 / span, 24);
+  for (let i = 0; i < rgba.length; i += 4) {
+    rgba[i] = Math.min(255, Math.round((rgba[i] - min) * gain));
+  }
+}
+
 /** Reads the manifest written by the extraction script, or null if absent. */
 export async function loadPackMeta(baseUrl = PACK_ROOT): Promise<PackMeta | null> {
   try {
@@ -60,7 +95,13 @@ async function readImage(url: string): Promise<{ data: Uint8ClampedArray; size: 
   try {
     const response = await fetch(url, { cache: 'force-cache' });
     if (!response.ok) return null;
-    const bitmap = await createImageBitmap(await response.blob());
+    // No premultiplication and no colour management: three of the four
+    // channels in `_n` and `_s` are data, not colour, and both conversions
+    // would quietly rewrite them.
+    const bitmap = await createImageBitmap(await response.blob(), {
+      premultiplyAlpha: 'none',
+      colorSpaceConversion: 'none',
+    });
 
     // Packs sometimes ship animated textures as a vertical strip of frames;
     // take the first square frame so the tile stays 1:1.
@@ -144,6 +185,8 @@ export async function loadPackMaterial(
       material[i + 3] = 0;
     }
   }
+
+  normalizeHeight(material);
 
   return { albedo, surface, material, size };
 }

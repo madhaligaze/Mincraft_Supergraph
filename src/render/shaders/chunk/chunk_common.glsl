@@ -40,15 +40,31 @@ const vec3 FACE_NORMAL[6] = vec3[6](
   vec3( 0.0,  0.0, -1.0)
 );
 
-/** Tangent hint per face, matching the mesher's UV basis. */
-const vec3 FACE_TANGENT[6] = vec3[6](
-  vec3( 0.0,  1.0,  0.0),
+/**
+ * World direction the texture's U axis runs along, per face.
+ *
+ * This is the mesher's tile layout, not its greedy sweep basis: on +X and -Z
+ * the mesher transposes the tile coordinates (`FACE_SWAP_UV`) so that the
+ * world vertical always lands on V. Anything that works in texture space —
+ * normal maps, parallax — has to follow that transposition, or bumps come out
+ * mirrored across the diagonal on those two faces.
+ */
+const vec3 FACE_TEX_U[6] = vec3[6](
+  vec3( 0.0,  0.0,  1.0),
   vec3( 0.0,  0.0,  1.0),
   vec3( 0.0,  0.0,  1.0),
   vec3( 1.0,  0.0,  0.0),
   vec3( 1.0,  0.0,  0.0),
-  vec3( 0.0,  1.0,  0.0)
+  vec3( 1.0,  0.0,  0.0)
 );
+
+/**
+ * Handedness of that UV frame: the transposition mirrors it, so on +X and -Z
+ * the V axis is `-cross(normal, U)` rather than `+cross(normal, U)`. Feeding
+ * the mirrored sign into the bitangent is the standard way to shade a mirrored
+ * UV mapping without a second table.
+ */
+const float FACE_UV_SIGN[6] = float[6](-1.0, 1.0, 1.0, 1.0, 1.0, -1.0);
 
 struct ChunkVertex {
   vec3 localPos;
