@@ -140,14 +140,31 @@ void main() {
   float NoL = dot(N, uSunDirection.xyz);
 
   if (uSunDirection.w > 0.001) {
-    float shadowRotation = interleavedGradientNoise(gl_FragCoord.xy + SCENE_FRAME) * TAU;
-    float shadow = sampleShadow(
-      vWorldPos, faceNormal, saturate(NoL), viewDistance, shadowRotation, SHADOW_QUALITY
-    );
+    // A face turned away from the sun receives no direct light, so the shadow
+    // lookup — six filtered taps, and twice that inside a cascade blend band —
+    // is pure waste there. In a voxel world roughly half of every visible
+    // surface is turned away at any moment.
+    //
+    // Foliage is the exception: wrapped diffuse and transmission both reach
+    // past the terminator, so it needs the lookup a little further round.
+#ifdef FOLIAGE
+    bool needsShadow = NoL > -0.62;
+#else
+    bool needsShadow = NoL > 0.0;
+#endif
 
-    // Baked skylight vetoes the shadow map: a cave the cascades never covered
-    // must not receive direct sun just because nothing occluded it on screen.
-    shadow *= smoothstep(0.02, 0.35, skyVisibility);
+    float shadow = 0.0;
+    if (needsShadow) {
+      float shadowRotation = interleavedGradientNoise(gl_FragCoord.xy + SCENE_FRAME) * TAU;
+      shadow = sampleShadow(
+        vWorldPos, faceNormal, saturate(NoL), viewDistance, shadowRotation, SHADOW_QUALITY
+      );
+
+      // Baked skylight vetoes the shadow map: a cave the cascades never
+      // covered must not receive direct sun just because nothing occluded it
+      // on screen.
+      shadow *= smoothstep(0.02, 0.35, skyVisibility);
+    }
 
     vec3 sunRadiance = uSunColor.rgb * uSunDirection.w;
 
