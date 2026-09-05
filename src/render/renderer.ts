@@ -538,13 +538,19 @@ export class Renderer implements MeshSink {
       profiler.end();
     }
 
-    profiler.begin('scene copy');
-    this.copyScene();
-    profiler.end();
+    // The copy exists solely so the water shader can read what is behind it.
+    // It is a full-resolution colour and depth blit, so doing it on frames
+    // with no water in view is a millisecond thrown away — and underground or
+    // inland that is most frames.
+    if (this.geometry.list(Bucket.Water).length > 0) {
+      profiler.begin('scene copy');
+      this.copyScene();
+      profiler.end();
 
-    profiler.begin('water');
-    this.renderWater(frame);
-    profiler.end();
+      profiler.begin('water');
+      this.renderWater(frame);
+      profiler.end();
+    }
 
     this.renderTranslucent(frame);
 
