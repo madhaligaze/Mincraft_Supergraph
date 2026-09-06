@@ -1319,14 +1319,18 @@ export class Renderer implements MeshSink {
     // coplanar with a block face the solid surface wins deterministically
     // instead of the two trading pixels triangle by triangle.
     //
-    // The sign is the whole point, and it was wrong here for a long time.
-    // Depth is reversed — nearer is a *larger* value — so a positive offset
-    // pushes water towards the camera, which is the opposite of what this line
-    // is for. Worse, the offset scales with the depth slope, and a water plane
-    // seen edge-on at distance has an enormous one, so the wrong sign was
-    // strongest exactly where the shoreline needed it most.
+    // Depth is reversed — nearer is a *larger* value — so the offset is
+    // negative. The slope factor is zero, and that is the point: it used to be
+    // -1, and a water plane seen edge-on has a depth slope of thousands, so out
+    // near the horizon the offset stopped being a nudge and shoved the surface
+    // clean through the sea floor. What showed through the hole was sand, drawn
+    // as the thin bright wires that ran across the sea to the vanishing point.
+    //
+    // A constant is enough here. The mesher already drops the water surface a
+    // quarter of a block below the block top, so exact coplanarity with the
+    // shore never actually happens; this only has to break ties.
     gl.enable(gl.POLYGON_OFFSET_FILL);
-    gl.polygonOffset(-1.0, -1.0);
+    gl.polygonOffset(0.0, -4.0);
 
     this.state.useProgram(program.handle);
     this.bindChunkCommon(program);
@@ -1336,6 +1340,11 @@ export class Renderer implements MeshSink {
     program.int('uSceneDepth', 8);
     program.float('uWaveAmplitude', 0.085);
     program.int('uWaveCount', this.settings.ssrSteps > 0 ? 5 : 3);
+    // Where the vertex displacement fades out. Past this the surface is a flat
+    // plane with a per-pixel wave normal on it, which is both what distant
+    // water looks like and the only way to keep two levels of detail from
+    // tearing apart along their shared edge.
+    program.vec2('uWaveFade', 48, 96);
     program.int('uSsrSteps', this.settings.waterReflections ? this.settings.ssrSteps : 0);
     program.float('uSsrDistance', 52);
     program.float('uRefractionStrength', this.settings.waterRefraction ? 1.0 : 0.0);

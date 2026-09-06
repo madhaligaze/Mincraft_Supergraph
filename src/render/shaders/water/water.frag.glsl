@@ -23,6 +23,7 @@ uniform sampler2D uSceneColor;
 uniform sampler2D uSceneDepth;
 
 uniform float uWaveAmplitude;
+uniform int uWaveCount;
 /** 0 disables screen-space reflection and uses the sky alone. */
 uniform int uSsrSteps;
 /**
@@ -47,7 +48,6 @@ uniform vec3 uDebugBucket;
 in vec3 vWorldPos;
 in vec2 vUv;
 in vec3 vLightAO;
-in vec2 vWaveGradient;
 in vec3 vWaterTint;
 flat in float vTexLayer;
 flat in vec3 vFaceNormal;
@@ -103,7 +103,31 @@ void main() {
   // of an ocean is past the fade.
   float detailFade = 1.0 - saturate((viewDistance - 10.0) / 46.0);
   if (vIsSurface > 0.5) {
-    vec3 waveNormal = normalize(vec3(-vWaveGradient.x, 1.0, -vWaveGradient.y));
+    // Evaluated here rather than interpolated from the vertex stage: see the
+    // note in water.vert.glsl about greedy-meshed ocean quads.
+    //
+    // Waves are dropped from the sum with distance, shortest first. Each one is
+    // a little under twice the frequency of the last, so the fifth has a
+    // wavelength of about two blocks — at a hundred blocks out that is well
+    // under a pixel, and a normal built from it is not shape but noise. That
+    // noise, run through a sharp specular lobe, is what turned the far half of
+    // an ocean into a field of black and white speckle. Dropping the term is
+    // better than fading its amplitude: fading leaves the frequency in place
+    // and only makes the aliasing quieter.
+    int waveCount = int(mix(float(uWaveCount), 2.0,
+      saturate((viewDistance - 24.0) / 80.0)));
+
+    vec3 waves = gerstnerWaves(
+      vWorldPos.xz, SCENE_TIME, SCENE_WIND_ANGLE,
+      uWaveAmplitude * (1.0 + SCENE_RAIN * 0.8), waveCount
+    );
+
+    // The long swell flattens too, just much later: a twenty-block wave is
+    // still shape at two hundred blocks, and a sheet is what the sea becomes
+    // beyond that anyway.
+    float swell = 1.0 - smoothstep(150.0, 380.0, viewDistance);
+    vec3 waveNormal = normalize(vec3(-waves.y * swell, 1.0, -waves.z * swell));
+
     if (detailFade > 0.01) {
       vec3 ripple = detailNormal(vWorldPos.xz, SCENE_TIME);
       N = normalize(mix(
@@ -117,6 +141,24 @@ void main() {
   } else {
     N = vFaceNormal;
   }
+
+  // --- shadow ---
+  // Sampled here rather than just before the specular, because the volume
+  // scattering below wants it too: water in the shadow of a cliff is darker all
+  // the way down, not merely missing its highlight.
+  //
+  // Only on nearby water. Out on open ocean there is nothing to cast a shadow,
+  // and the six-tap filter was running on every pixel of a sea that fills half
+  // the screen.
+  float shadow = 1.0;
+  if (viewDistance < uSsrDistance * 1.6) {
+    float shadowRotation = interleavedGradientNoise(gl_FragCoord.xy + SCENE_FRAME) * TAU;
+    shadow = sampleShadow(
+      vWorldPos, vec3(0.0, 1.0, 0.0), saturate(dot(N, uSunDirection.xyz)),
+      viewDistance, shadowRotation, SHADOW_QUALITY
+    );
+  }
+  shadow *= smoothstep(0.02, 0.35, vLightAO.x);
 
   // --- what is behind the water ---
   float backgroundDepth = texture(uSceneDepth, screenUv).r;
@@ -145,12 +187,27 @@ void main() {
   // Beer-Lambert: each channel is absorbed at its own rate, which is why deep
   // water goes blue-green rather than simply darker.
   vec3 absorption = (vec3(1.0) - vWaterTint) * vec3(0.42, 0.16, 0.11);
-  vec3 transmitted = behind * exp(-absorption * waterColumn * 1.35);
-  // Light scattered back out of the volume; this is what stops deep water from
-  // turning into a black hole.
-  vec3 scattered = vWaterTint * skyZenithRadiance() * 0.35;
-  float scatterAmount = 1.0 - exp(-waterColumn * 0.11);
-  vec3 refracted = mix(transmitted, scattered, scatterAmount * 0.85);
+  vec3 transmitted = behind * exp(-absorption * waterColumn * 1.1);
+
+  // Light scattered back out of the volume.
+  //
+  // This is the only thing under the Fresnel reflection, so whatever it is, is
+  // what the sea looks like wherever it is not mirroring the sky — which at a
+  // shallow viewing angle means every wave trough. At 0.35 of the zenith
+  // radiance it came to almost nothing, and the sea read as black troughs
+  // between white crests instead of as water.
+  //
+  // Two corrections. The sun is in it now: the body colour of a sea at noon and
+  // the body colour of the same sea at dusk are not the same, and the zenith
+  // sky alone cannot tell them apart. And the overall level is up, because the
+  // quantity being modelled is not the water's scattering albedo on its own but
+  // the whole upwelling column — every metre of it lit from above.
+  vec3 waterLight = skyZenithRadiance() * 0.9 +
+    uSunColor.rgb * uSunDirection.w * saturate(uSunDirection.y) * 0.055;
+  vec3 scattered = vWaterTint * waterLight * shadow;
+
+  float scatterAmount = 1.0 - exp(-waterColumn * 0.13);
+  vec3 refracted = mix(transmitted, scattered, scatterAmount * 0.88);
 
   // --- reflection ---
   vec3 R = reflect(viewDir, N);
@@ -188,19 +245,6 @@ void main() {
   float baseRoughness = mix(0.012, 0.06, SCENE_RAIN);
   float roughness = mix(baseRoughness, 0.16, saturate((viewDistance - 14.0) / 110.0));
   roughness = max(roughness * roughness, 1e-5);
-
-  // Shadows are only sampled on nearby water. Out on open ocean there is
-  // nothing to cast them, and the six-tap filter was running on every pixel of
-  // a sea that fills half the screen.
-  float shadow = 1.0;
-  if (viewDistance < uSsrDistance * 1.6) {
-    float shadowRotation = interleavedGradientNoise(gl_FragCoord.xy + SCENE_FRAME) * TAU;
-    shadow = sampleShadow(
-      vWorldPos, vec3(0.0, 1.0, 0.0), saturate(dot(N, uSunDirection.xyz)),
-      viewDistance, shadowRotation, SHADOW_QUALITY
-    );
-  }
-  shadow *= smoothstep(0.02, 0.35, vLightAO.x);
 
   if (uSunDirection.w > 0.001) {
     vec3 H = normalize(V + uSunDirection.xyz);
