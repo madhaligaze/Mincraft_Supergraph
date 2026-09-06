@@ -14,7 +14,8 @@
  *   blocks  straight down at a block boundary       — relief, sliced edges
  *   sea     shoreline out to open water             — wave shape, water colour
  *   under   submerged, looking level                — underwater look
- *   trees   under a canopy, looking up              — tree shape, leaf noise
+ *   tree    a whole tree from fifteen blocks        — silhouette, trunk to crown
+ *   canopy  under the same tree, looking up         — leaf density and light
  *   air     high above, looking down                — draw distance, depth
  *
  * Any argument of the form `key=value` is applied as a setting override before
@@ -109,9 +110,9 @@ const findColumn = (kind, radius) => page.evaluate((k, r) => {
   const cx = Math.floor(player.position[0]);
   const cz = Math.floor(player.position[2]);
   const SEA = 62;
-  // Block ids from world/blocks.ts.
+  // Block ids from the enum in world/blocks.ts, counted from Air = 0.
   const WATER = 31;
-  const LOGS = [28, 30, 32];
+  const LOGS = [18, 20, 22];   // oak, birch, spruce
 
   for (let i = 0; i < 6000; i++) {
     const a = i * 2.399963;
@@ -144,13 +145,19 @@ const findColumn = (kind, radius) => page.evaluate((k, r) => {
     }
 
     if (k === 'tree') {
-      // A trunk: four or more log blocks stacked anywhere in the column.
+      // A trunk: four or more log blocks stacked anywhere in the column. The y
+      // returned is the *foot* of the trunk, not the column height — the height
+      // map counts the canopy, and standing on top of that looks down at the
+      // treetops rather than up at a tree.
       let logs = 0;
+      let foot = -1;
       for (let y = SEA; y < 140; y++) {
-        if (LOGS.includes(world.getBlock(x, y, z))) logs++;
+        if (!LOGS.includes(world.getBlock(x, y, z))) continue;
+        logs++;
+        if (foot < 0) foot = y;
       }
       if (logs < 4) continue;
-      return { x, y: h, z };
+      return { x, y: foot, z };
     }
   }
   return null;
@@ -195,18 +202,29 @@ await shoot('blocks', `(() => {
   return true;
 })()`);
 
-// --- 4. under a canopy ---
+// --- 4. a whole tree, and the same tree from underneath ---
 // Searched from home, before anything walks off to the coast: the forest is
 // here, and `isReadyAt` only answers for chunks that are currently streamed in.
-const tree = await findColumn('tree', 110);
+//
+// Two shots, because they answer different questions. The portrait shows the
+// silhouette and, more to the point, whether the trunk actually reaches the
+// crown — a canopy standing off the top of its own trunk is the single most
+// obvious thing that can be wrong with a tree, and it is invisible from below.
+const tree = await findColumn('tree', 190);
 console.log(`tree: ${tree ? `${tree.x} ${tree.y} ${tree.z}` : 'not found'}`);
 if (tree) {
-  await page.evaluate((t) => window.supergraph.teleport(t.x + 7.5, t.y + 2.2, t.z + 0.5), tree);
+  await page.evaluate((t) => window.supergraph.teleport(t.x + 15.5, t.y + 6, t.z + 0.5), tree);
   await new Promise((r) => setTimeout(r, 14000));
-  await shoot('trees', `(() => {
+  await shoot('tree', `(() => {
     const api = window.supergraph;
-    api.teleport(${tree.x} + 7.5, ${tree.y} + 2.2, ${tree.z} + 0.5);
-    api.look(Math.PI * 0.5, 0.3);
+    api.teleport(${tree.x} + 15.5, ${tree.y} + 6, ${tree.z} + 0.5);
+    api.look(Math.PI * 0.5, 0.12);
+    return true;
+  })()`);
+  await shoot('canopy', `(() => {
+    const api = window.supergraph;
+    api.teleport(${tree.x} + 4.5, ${tree.y} + 2.2, ${tree.z} + 0.5);
+    api.look(Math.PI * 0.5, 0.5);
     return true;
   })()`);
   await page.evaluate((h) => window.supergraph.teleport(h.x + 0.5, h.y + 1.7, h.z + 0.5), home3);

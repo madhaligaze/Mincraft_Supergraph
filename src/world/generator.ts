@@ -746,24 +746,109 @@ export class TerrainGenerator {
       }
     };
 
+    /**
+     * A limb from the trunk out to a point, stepped one block at a time.
+     *
+     * This is what the trees were missing. Without branches a canopy is a lump
+     * of leaves balanced on a bare pole with nothing joining the two, and from
+     * underneath — which is where a player stands — that reads as a mushroom
+     * rather than as a tree. A limb also gives the crown somewhere to hang off
+     * that is not the trunk's own axis, which is most of what stops a stand of
+     * trees from looking stamped from one mould.
+     */
+    const limb = (
+      fromX: number, fromY: number, fromZ: number,
+      toX: number, toY: number, toZ: number,
+      wood: Block,
+    ): void => {
+      const dx = toX - fromX;
+      const dy = toY - fromY;
+      const dz = toZ - fromZ;
+      const steps = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
+      if (steps <= 0) {
+        put(fromX, fromY, fromZ, wood, true);
+        return;
+      }
+
+      // From `i = 0`, so the joint itself is wood.
+      //
+      // Starting at 1 left the block where the limb meets the trunk empty:
+      // one step along a diagonal already moves in every axis at once, so the
+      // first block placed was offset from the trunk in x, y and z and shared
+      // only a corner with it. The crown then hung in the air above a trunk
+      // that stopped short of it, which is exactly what a tree must never do.
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = Math.round(fromX + dx * t);
+        const y = Math.round(fromY + dy * t);
+        const z = Math.round(fromZ + dz * t);
+        put(x, y, z, wood, true);
+
+        // A diagonal step moves horizontally and vertically in the same block,
+        // which leaves the limb joined only along an edge — visible as a gap
+        // from underneath. Filling the cell below the step closes it.
+        if (i > 0 && dy !== 0) put(x, y - 1, z, wood, false);
+      }
+    };
+
+    /** Picks `count` roughly even directions around the trunk, rotated by the rng. */
+    const spokes = (count: number): Array<[number, number]> => {
+      const base = rng() * Math.PI * 2;
+      const out: Array<[number, number]> = [];
+      for (let i = 0; i < count; i++) {
+        const a = base + (i / count) * Math.PI * 2 + (rng() - 0.5) * 0.7;
+        out.push([Math.cos(a), Math.sin(a)]);
+      }
+      return out;
+    };
+
     switch (kind) {
       case 'oak':
       case 'swampOak': {
-        const trunk = 4 + Math.floor(rng() * 3) + (kind === 'swampOak' ? 1 : 0);
+        const trunk = 5 + Math.floor(rng() * 3) + (kind === 'swampOak' ? 1 : 0);
+        const top = baseY + trunk;
         for (let y = 0; y < trunk; y++) put(baseX, baseY + y, baseZ, Block.OakLog, true);
-        leafBall(baseX, baseY + trunk, baseZ, 2, 2, Block.OakLeaves, 0.45);
-        leafBall(baseX, baseY + trunk - 2, baseZ, 3, 1, Block.OakLeaves, 0.5);
+
+        // Two or three limbs out of the upper third, each carrying its own
+        // clump. The crown is then the union of several overlapping balls
+        // rather than one ellipsoid, which is what gives an oak its lumpy
+        // silhouette and keeps two neighbouring oaks from being the same tree.
+        for (const [dx, dz] of spokes(2 + Math.floor(rng() * 2))) {
+          const reach = 2 + Math.floor(rng() * 2);
+          const from = top - 2 - Math.floor(rng() * 2);
+          const endX = baseX + Math.round(dx * reach);
+          const endZ = baseZ + Math.round(dz * reach);
+          const endY = from + 1 + Math.floor(rng() * 2);
+          limb(baseX, from, baseZ, endX, endY, endZ, Block.OakLog);
+          leafBall(endX, endY, endZ, 2, 2, Block.OakLeaves, 0.45);
+        }
+
+        leafBall(baseX, top, baseZ, 2, 2, Block.OakLeaves, 0.4);
+        leafBall(baseX, top - 2, baseZ, 3, 2, Block.OakLeaves, 0.5);
         break;
       }
       case 'birch': {
-        const trunk = 6 + Math.floor(rng() * 3);
+        // Slim and tall, with the crown high up: a birch is mostly trunk, and
+        // the narrow crown is what tells it apart from an oak at a distance.
+        const trunk = 7 + Math.floor(rng() * 4);
+        const top = baseY + trunk;
         for (let y = 0; y < trunk; y++) put(baseX, baseY + y, baseZ, Block.BirchLog, true);
-        leafBall(baseX, baseY + trunk, baseZ, 2, 2, Block.BirchLeaves, 0.4);
-        leafBall(baseX, baseY + trunk - 2, baseZ, 2, 1, Block.BirchLeaves, 0.45);
+
+        for (const [dx, dz] of spokes(2)) {
+          const from = top - 2;
+          const endX = baseX + Math.round(dx * 2);
+          const endZ = baseZ + Math.round(dz * 2);
+          limb(baseX, from, baseZ, endX, from + 2, endZ, Block.BirchLog);
+          leafBall(endX, from + 2, endZ, 2, 2, Block.BirchLeaves, 0.45);
+        }
+
+        leafBall(baseX, top, baseZ, 2, 3, Block.BirchLeaves, 0.4);
+        leafBall(baseX, top - 3, baseZ, 2, 2, Block.BirchLeaves, 0.5);
         break;
       }
       case 'darkOak': {
-        const trunk = 6 + Math.floor(rng() * 2);
+        const trunk = 6 + Math.floor(rng() * 3);
+        const top = baseY + trunk;
         for (let y = 0; y < trunk; y++) {
           // 2x2 trunk.
           put(baseX, baseY + y, baseZ, Block.OakLog, true);
@@ -771,43 +856,93 @@ export class TerrainGenerator {
           put(baseX, baseY + y, baseZ + 1, Block.OakLog, true);
           put(baseX + 1, baseY + y, baseZ + 1, Block.OakLog, true);
         }
-        leafBall(baseX, baseY + trunk, baseZ, 4, 2, Block.OakLeaves, 0.5);
+
+        // Four heavy limbs and a broad two-tier crown. Dark oak is the tree
+        // whose canopy is supposed to close over the player's head.
+        for (const [dx, dz] of spokes(4)) {
+          const reach = 3 + Math.floor(rng() * 2);
+          const from = top - 2;
+          const endX = baseX + Math.round(dx * reach);
+          const endZ = baseZ + Math.round(dz * reach);
+          limb(baseX, from, baseZ, endX, from + 1, endZ, Block.OakLog);
+          leafBall(endX, from + 1, endZ, 2, 2, Block.OakLeaves, 0.5);
+        }
+
+        leafBall(baseX, top, baseZ, 4, 2, Block.OakLeaves, 0.45);
+        leafBall(baseX, top - 2, baseZ, 3, 1, Block.OakLeaves, 0.55);
         break;
       }
       case 'spruce':
       case 'tallSpruce': {
-        const trunk = (kind === 'tallSpruce' ? 10 : 7) + Math.floor(rng() * 4);
+        const trunk = (kind === 'tallSpruce' ? 11 : 8) + Math.floor(rng() * 4);
         for (let y = 0; y < trunk; y++) put(baseX, baseY + y, baseZ, Block.SpruceLog, true);
-        // Stacked shrinking discs give the conifer silhouette.
-        let radius = 3;
-        for (let y = trunk - 2; y >= 2; y -= 2) {
-          for (let z = -radius; z <= radius; z++) {
-            for (let x = -radius; x <= radius; x++) {
-              if (x * x + z * z > radius * radius + 1) continue;
+
+        // A cone, not a stack of alternating discs.
+        //
+        // The old shape stepped the radius 3, 2, 3, 2 up the trunk, which is
+        // neither a taper nor a set of tiers — it just looked like a mistake.
+        // The radius now falls off with height and is modulated by a slow
+        // ripple, so the tree keeps the tiered look a conifer has while still
+        // narrowing to a point.
+        const base = kind === 'tallSpruce' ? 3.4 : 2.9;
+        const bottom = 2;
+        for (let y = trunk; y >= bottom; y--) {
+          const t = (y - bottom) / Math.max(1, trunk - bottom);
+          // Tiers: full at the whorls, pulled in between them.
+          const tier = 0.72 + 0.28 * Math.cos((y - bottom) * 1.05);
+          const radius = base * (1 - t * 0.92) * tier;
+          if (radius < 0.4) {
+            put(baseX, baseY + y, baseZ, Block.SpruceLeaves, false);
+            continue;
+          }
+          const r = Math.ceil(radius);
+          for (let z = -r; z <= r; z++) {
+            for (let x = -r; x <= r; x++) {
+              const d = Math.sqrt(x * x + z * z);
+              if (d > radius) continue;
+              // Ragged edge, or the cone reads as turned on a lathe.
+              if (d > radius - 0.9 && (hash3i(baseX + x, baseY + y, baseZ + z) & 3) === 0) {
+                continue;
+              }
               put(baseX + x, baseY + y, baseZ + z, Block.SpruceLeaves, false);
             }
           }
-          radius = radius === 3 ? 2 : radius === 2 ? 3 : 2;
         }
-        put(baseX, baseY + trunk, baseZ, Block.SpruceLeaves, false);
         put(baseX, baseY + trunk + 1, baseZ, Block.SpruceLeaves, false);
         break;
       }
       case 'acacia': {
-        const trunk = 5 + Math.floor(rng() * 2);
-        const leanX = rng() < 0.5 ? 1 : -1;
-        let x = baseX;
-        for (let y = 0; y < trunk; y++) {
-          if (y > 2 && y % 2 === 0) x += leanX;
-          put(x, baseY + y, baseZ, Block.OakLog, true);
-        }
-        // Flat umbrella canopy.
-        for (let z = -3; z <= 3; z++) {
-          for (let dx = -3; dx <= 3; dx++) {
-            if (dx * dx + z * z > 10) continue;
-            put(x + dx, baseY + trunk, baseZ + z, Block.OakLeaves, false);
-            if (dx * dx + z * z <= 4) {
-              put(x + dx, baseY + trunk + 1, baseZ + z, Block.OakLeaves, false);
+        // The umbrella, forked.
+        //
+        // What was here before was one leaning pole with a disc one block thick
+        // on top: from below, a bare stem holding a plate, which is the shape
+        // that got reported as a mushroom. A real acacia forks partway up and
+        // each fork spreads its own flat crown, and the crown is thick enough
+        // to be a canopy rather than a lid.
+        const trunk = 4 + Math.floor(rng() * 2);
+        for (let y = 0; y < trunk; y++) put(baseX, baseY + y, baseZ, Block.OakLog, true);
+
+        const forkY = baseY + trunk;
+        const forks = spokes(2);
+        for (const [dx, dz] of forks) {
+          const reach = 2 + Math.floor(rng() * 2);
+          const rise = 2 + Math.floor(rng() * 2);
+          const endX = baseX + Math.round(dx * reach);
+          const endZ = baseZ + Math.round(dz * reach);
+          const endY = forkY + rise;
+          limb(baseX, forkY, baseZ, endX, endY, endZ, Block.OakLog);
+
+          // Flat but not thin: three blocks at the middle, tapering out.
+          const spread = 3;
+          for (let z = -spread; z <= spread; z++) {
+            for (let x = -spread; x <= spread; x++) {
+              const d2 = x * x + z * z;
+              if (d2 > spread * spread + 1) continue;
+              const thickness = d2 <= 2 ? 2 : d2 <= 6 ? 1 : 0;
+              for (let y = -thickness; y <= 1; y++) {
+                if (d2 > 6 && y < 0) continue;
+                put(endX + x, endY + y, endZ + z, Block.OakLeaves, false);
+              }
             }
           }
         }

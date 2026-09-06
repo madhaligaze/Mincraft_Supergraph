@@ -228,7 +228,14 @@ void main() {
 #ifdef ALPHA_TEST
   // Sharpen the cutout edge against the mip chain: as the mipmap averages
   // alpha down, distant leaves would otherwise dissolve into nothing.
-  if (albedoSample.a * (1.0 + lod * 0.4) < 0.5) discard;
+  //
+  // The threshold is low on purpose. At 0.5 a leaf texture's soft edges were
+  // being thrown away texel by texel, so a canopy came out as a sieve and the
+  // sky behind it showed through as a field of bright specks — the thing that
+  // made every tree look like it was covered in static. Keeping the partly
+  // covered texels costs nothing (they are opaque either way once through the
+  // test) and closes the canopy.
+  if (albedoSample.a * (1.0 + lod * 0.4) < 0.34) discard;
 #endif
 
   vec4 surface = texture(uSurfaceArray, vec3(uv, vTexLayer));
@@ -339,10 +346,13 @@ void main() {
     // is pure waste there. In a voxel world roughly half of every visible
     // surface is turned away at any moment.
     //
-    // Foliage is the exception: wrapped diffuse and transmission both reach
-    // past the terminator, so it needs the lookup a little further round.
+    // Foliage is the exception, and not by a little: a leaf facing straight
+    // away from the sun is exactly the case the transmission term exists for,
+    // and skipping the lookup there left `shadow` at zero, which multiplied the
+    // transmission away. The underside of every canopy — which is where a
+    // player standing under a tree is looking — came out black because of it.
 #ifdef FOLIAGE
-    bool needsShadow = NoL > -0.62;
+    bool needsShadow = true;
 #else
     bool needsShadow = NoL > 0.0;
 #endif
@@ -392,11 +402,18 @@ void main() {
     // How much gets through is the material's own property, and LabPBR ships
     // it: the subsurface channel is high on leaves and grass and zero on the
     // stone and planks that share this pass.
+    //
+    // Most of the term is view-independent. It used to be multiplied by
+    // `pow(dot(viewDir, sunDir), 6.0)` alone — a lobe tight enough that a lit
+    // canopy only appeared while the camera pointed almost exactly at the sun,
+    // and stayed black the rest of the time. Light that has passed through a
+    // leaf scatters into the whole hemisphere; the narrow forward lobe is the
+    // extra glow when the sun does line up, not the whole effect.
     float backlight = saturate(dot(-N, uSunDirection.xyz));
-    float transmission = pow(saturate(dot(viewDir, uSunDirection.xyz)), 6.0);
+    float forward = pow(saturate(dot(viewDir, uSunDirection.xyz)), 4.0);
     vec3 transmitTint = mix(albedo, vec3(luminance(albedo)) * vec3(1.15, 1.0, 0.65), 0.45);
-    color += transmitTint * sunRadiance * shadow * backlight * transmission *
-      mix(0.2, 0.55, subsurface);
+    color += transmitTint * sunRadiance * shadow * backlight *
+      (0.18 + 0.6 * forward) * mix(0.25, 0.7, subsurface);
 #else
     color += directBRDF(albedo, metallic, roughness, N, V, uSunDirection.xyz, dielectricF0) * sunRadiance * shadow;
 #endif
@@ -413,7 +430,14 @@ void main() {
   // --- ambient from the sky ---
   // Bias the sample direction upward so a downward-facing surface still reads
   // the sky rather than the black below the horizon.
+#ifdef FOLIAGE
+  // A leaf is a thin sheet, not a wall: it collects light from most of the
+  // hemisphere whichever way its own normal happens to point, so the sample
+  // direction leans hard towards the sky.
+  vec3 ambientDir = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.6));
+#else
   vec3 ambientDir = normalize(vec3(N.x, max(N.y, 0.05), N.z));
+#endif
   vec3 skyRadiance = sampleSkyView(ambientDir);
 
   // Ground bounce: sky light that hit the terrain and came back, tinted by it.
@@ -427,7 +451,16 @@ void main() {
   groundRadiance = mix(groundRadiance, skyRadiance * giSample.rgb * uGiParams.w, giTrust);
 #endif
 
+#ifdef FOLIAGE
+  // Leaves are thin and let light through, so a block deep inside a canopy is
+  // not lit by "how much sky can reach it" the way a stone wall is — light
+  // arrives having passed through the leaves above. The baked skylight cannot
+  // know that, and squaring it as the opaque path does turned the underside of
+  // every crown black, which is where a player standing under a tree looks.
+  float skyTerm = pow(skyVisibility, 0.7);
+#else
   float skyTerm = skyVisibility * skyVisibility * (3.0 - 2.0 * skyVisibility);
+#endif
   color += ambientLighting(
     albedo, metallic, perceptualRoughness, N, V,
     skyRadiance * skyTerm, groundRadiance * mix(0.35, 1.0, skyTerm),
