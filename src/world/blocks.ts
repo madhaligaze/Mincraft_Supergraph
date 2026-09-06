@@ -372,6 +372,67 @@ for (const d of DEFS) {
 }
 
 // ---------------------------------------------------------------------------
+// Average albedo
+// ---------------------------------------------------------------------------
+
+/**
+ * Roughly what colour a block is, averaged over its texture, as **linear**
+ * reflectance.
+ *
+ * Only the indirect-light volume uses this. It runs in a worker, which has the
+ * world but not the material textures — those live on the GPU — and it needs
+ * one number per block, not a texture: what a wall bounces is its average
+ * colour, and averaging is exactly what a coarse light grid does anyway.
+ *
+ * Biome-tinted blocks carry their untinted base here; the builder multiplies in
+ * the column's own grass or foliage colour, the same way the mesher does.
+ */
+const ALBEDO: Partial<Record<Block, readonly [number, number, number]>> = {
+  [Block.Stone]: [0.21, 0.21, 0.22],
+  [Block.Granite]: [0.25, 0.17, 0.14],
+  [Block.Andesite]: [0.20, 0.20, 0.20],
+  [Block.Dirt]: [0.13, 0.09, 0.06],
+  [Block.GrassBlock]: [0.30, 0.30, 0.30],
+  [Block.Podzol]: [0.09, 0.06, 0.03],
+  [Block.Sand]: [0.60, 0.53, 0.36],
+  [Block.RedSand]: [0.40, 0.17, 0.07],
+  [Block.Gravel]: [0.17, 0.16, 0.16],
+  [Block.Clay]: [0.32, 0.34, 0.38],
+  [Block.Sandstone]: [0.56, 0.50, 0.34],
+  [Block.SnowBlock]: [0.85, 0.87, 0.92],
+  [Block.Ice]: [0.45, 0.60, 0.78],
+  [Block.PackedIce]: [0.44, 0.58, 0.76],
+  [Block.Bedrock]: [0.08, 0.08, 0.08],
+  [Block.Cobblestone]: [0.18, 0.18, 0.18],
+  [Block.MossyCobblestone]: [0.13, 0.17, 0.11],
+  [Block.OakLog]: [0.14, 0.10, 0.06],
+  [Block.BirchLog]: [0.55, 0.52, 0.44],
+  [Block.SpruceLog]: [0.08, 0.05, 0.03],
+  [Block.OakPlanks]: [0.30, 0.20, 0.11],
+  [Block.OakLeaves]: [0.30, 0.30, 0.30],
+  [Block.BirchLeaves]: [0.32, 0.32, 0.32],
+  [Block.SpruceLeaves]: [0.26, 0.26, 0.26],
+  [Block.CoalOre]: [0.16, 0.16, 0.16],
+  [Block.IronOre]: [0.24, 0.21, 0.19],
+  [Block.GoldOre]: [0.30, 0.25, 0.12],
+  [Block.DiamondOre]: [0.22, 0.28, 0.29],
+  [Block.Glowstone]: [0.70, 0.55, 0.25],
+  [Block.Glass]: [0.55, 0.60, 0.62],
+  [Block.Water]: [0.02, 0.06, 0.10],
+  [Block.Lava]: [0.60, 0.20, 0.04],
+  [Block.Cactus]: [0.10, 0.20, 0.07],
+};
+
+/** Three linear floats per block id. */
+export const BLOCK_ALBEDO = new Float32Array(Block.Count * 3);
+for (let id = 0; id < Block.Count; id++) {
+  const rgb = ALBEDO[id as Block] ?? [0.2, 0.2, 0.2];
+  BLOCK_ALBEDO[id * 3] = rgb[0];
+  BLOCK_ALBEDO[id * 3 + 1] = rgb[1];
+  BLOCK_ALBEDO[id * 3 + 2] = rgb[2];
+}
+
+// ---------------------------------------------------------------------------
 // Sound
 // ---------------------------------------------------------------------------
 

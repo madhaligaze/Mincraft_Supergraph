@@ -22,6 +22,18 @@ uniform sampler2D uAmbientOcclusion;
 /** Material tile resolution, for the manual mip estimate below. */
 uniform float uTextureSize;
 
+#ifdef USE_GI
+/**
+ * Indirect light: one texel per 4x4x4 blocks, baked in a worker from the world
+ * itself (see world/gi.ts). RGB is the colour of the light arriving there as a
+ * *fraction of sky radiance*, so one bake works at every hour — the sky colour
+ * it gets multiplied by is what changes.
+ */
+uniform sampler3D uGiVolume;
+/** xyz = world-to-grid scale, w = strength (0 before the first bake lands). */
+uniform vec4 uGiParams;
+#endif
+
 /**
  * Debug channel selector. 0 shades normally; the rest dump one input as
  * colour, which is the fastest way to find out whether an artefact lives in
@@ -237,6 +249,19 @@ void main() {
   vec3 tangentNormal = vec3(nxy, sqrt(saturate(1.0 - dot(nxy, nxy))));
   vec3 N = normalize(tbn * tangentNormal);
 
+  // --- indirect light ---
+#ifdef USE_GI
+  // Sample half a cell out along the normal. A trilinear tap taken on the
+  // surface itself straddles the wall it sits on, and the rock inside is black
+  // — that is exactly how a light grid leaks darkness onto a lit face.
+  vec4 giSample = texture(uGiVolume, (vWorldPos + N * 2.0) * uGiParams.xyz);
+  // Alpha carries how open the cell is, and the grid only covers a box around
+  // the player: rather than pop at its edge, fade back to the flat
+  // approximation over the last few blocks.
+  float giTrust = giSample.a * (1.0 - smoothstep(66.0, 88.0, viewDistance)) *
+    step(0.0001, uGiParams.w);
+#endif
+
   // --- wetness ---
   // Rain pools on upward faces first. Wet surfaces darken (light refracts into
   // the film instead of scattering back) and smooth out (the film fills in the
@@ -277,6 +302,12 @@ void main() {
     else if (uDebugView == 7) fragColor = vec4(vTint, 1.0);                // biome tint
     else if (uDebugView == 8) fragColor = vec4(uDebugBucket, 1.0);         // which pass
     else if (uDebugView == 9) fragColor = vec4(vec3(textureAO), 1.0);      // texture AO
+#ifdef USE_GI
+    // Scaled up: bounced light is a fraction of the sky and would otherwise
+    // dump out as near-black.
+    else if (uDebugView == 11) fragColor = vec4(giSample.rgb * 5.0, 1.0);  // indirect
+    else if (uDebugView == 12) fragColor = vec4(vec3(giTrust), 1.0);       // grid trust
+#endif
     else fragColor = vec4(vec3(matData.r), 1.0);                           // height field
     return;
   }
@@ -367,10 +398,17 @@ void main() {
   // the sky rather than the black below the horizon.
   vec3 ambientDir = normalize(vec3(N.x, max(N.y, 0.05), N.z));
   vec3 skyRadiance = sampleSkyView(ambientDir);
+
   // Ground bounce: sky light that hit the terrain and came back, tinted by it.
   // Derived from the sky sample already taken rather than a second LUT lookup —
   // that lookup costs an acos and a texture fetch, and this runs per pixel.
   vec3 groundRadiance = skyRadiance * vec3(0.34, 0.32, 0.27) * 0.42;
+
+#ifdef USE_GI
+  // What the grid holds is a fraction of sky radiance, so multiplying it by
+  // the sky of the moment is what makes one bake serve every hour of the day.
+  groundRadiance = mix(groundRadiance, skyRadiance * giSample.rgb * uGiParams.w, giTrust);
+#endif
 
   float skyTerm = skyVisibility * skyVisibility * (3.0 - 2.0 * skyVisibility);
   color += ambientLighting(

@@ -139,7 +139,7 @@ export class Hud {
     clock: string;
     rain: number;
     wind: number;
-    world: { columns: number; generated: number; lit: number; pendingJobs: number; workers: number; shared: boolean };
+    world: { columns: number; generated: number; lit: number; pendingJobs: number; workers: number; shared: boolean; giBakeMs: number };
     render: { drawCalls: number; visibleQuads: number; totalQuads: number; sections: number; shadowDraws: number; internalWidth: number; internalHeight: number };
     renderer: string;
     facing: string;
@@ -188,6 +188,7 @@ export class Hud {
       '',
       `чанки ${w.lit}/${w.generated}/${w.columns} (свет/ген/всего)`,
       `очередь ${w.pendingJobs}   воркеры ${w.workers}   SAB ${w.shared ? 'да' : 'нет'}`,
+      `непрямой свет ${w.giBakeMs > 0 ? `${w.giBakeMs.toFixed(0)} мс на выпечку` : 'выкл'}`,
     ];
 
     this.statsEl.textContent = lines.join('\n');
@@ -240,6 +241,9 @@ export class Hud {
     this.addSlider('Дальность теней', 'shadowDistance', 48, 320, 8, (v) => `${v} бл.`);
     this.addSlider('Качество фильтра', 'shadowFilter', 1, 3, 1, (v) => String(v));
     this.addToggle('SSAO', 'ssaoEnabled');
+
+    this.addToggle('Непрямой свет', 'giEnabled');
+    this.addSlider('Сила непрямого', 'giStrength', 0, 2, 0.1, (v) => v.toFixed(1));
 
     this.addSectionTitle('Рельеф поверхности');
     this.addToggle('Параллакс', 'parallaxEnabled');

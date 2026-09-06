@@ -45,6 +45,12 @@ export interface Settings {
   /** A second march towards the sun, so the relief shadows itself. */
   parallaxShadows: boolean;
 
+  // Indirect light: a coarse grid of bounced sky light around the player,
+  // baked in a worker from the voxel world itself.
+  giEnabled: boolean;
+  /** How strongly the grid replaces the flat ground-bounce approximation. */
+  giStrength: number;
+
   // Ambient occlusion (screen space, on top of the baked per-vertex AO)
   ssaoEnabled: boolean;
   /** Fraction of the render target the AO buffer runs at. */
@@ -113,6 +119,9 @@ const BASE: Settings = {
   parallaxDistance: 18,
   parallaxShadows: false,
 
+  giEnabled: true,
+  giStrength: 1.0,
+
   ssaoEnabled: true,
   ssaoScale: 0.5,
   ssaoSamples: 12,
@@ -159,6 +168,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     shadowDistance: 72,
     shadowFilter: 1,
     parallaxEnabled: false,
+    giEnabled: false,
     ssaoEnabled: false,
     skyViewSteps: 12,
     aerialPerspective: false,
@@ -188,6 +198,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     parallaxSteps: 8,
     parallaxDepth: 0.06,
     parallaxDistance: 14,
+    giStrength: 0.9,
     ssaoScale: 0.5,
     ssaoSamples: 8,
     skyViewSteps: 16,

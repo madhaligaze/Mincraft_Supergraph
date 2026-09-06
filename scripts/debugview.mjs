@@ -20,7 +20,7 @@ const clip = cw !== undefined
 const VIEWS = [
   [0, 'shaded'], [1, 'vertexAO'], [2, 'skylight'],
   [4, 'normal'], [5, 'ssao'], [6, 'albedo'], [7, 'tint'],
-  [8, 'bucket'], [10, 'height'],
+  [8, 'bucket'], [10, 'height'], [11, 'indirect'], [12, 'gitrust'],
 ];
 
 const CHROME = [

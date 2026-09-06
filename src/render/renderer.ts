@@ -36,6 +36,7 @@ import { createMaterials, type MaterialTextures } from './textures.ts';
 import { generateCloudNoise, type CloudNoise } from './cloudNoise.ts';
 import { GpuProfiler } from './gpuProfiler.ts';
 import { Bucket, type SectionMeshResult } from '../world/mesher.ts';
+import { GI_CELL, GI_SIZE_XZ, GI_SIZE_Y, type GiResult } from '../world/gi.ts';
 import { CHUNK_SIZE, SEA_LEVEL } from '../world/constants.ts';
 import type { MeshSink } from '../world/world.ts';
 import type { Settings } from '../core/settings.ts';
@@ -151,6 +152,11 @@ export class Renderer implements MeshSink {
   private tintAtlas: WebGLTexture | null = null;
   private tintAtlasSize = 512;
 
+  /** Indirect light around the player, one texel per 4x4x4 blocks. */
+  private giVolume: WebGLTexture | null = null;
+  /** False until the first bake lands; until then the shader has nothing. */
+  private giReady = false;
+
   private emptyVao: WebGLVertexArrayObject;
   private sceneUbo: WebGLBuffer;
   private readonly sceneData = new Float32Array(SCENE_FLOATS);
@@ -232,6 +238,7 @@ export class Renderer implements MeshSink {
     const chunkDefines = {
       SHADOW_QUALITY: shadowQuality,
       USE_SSAO: s.ssaoEnabled,
+      USE_GI: s.giEnabled,
     };
 
     // Parallax goes on the opaque bucket only. Cutout geometry is cross-shaped
@@ -397,6 +404,43 @@ export class Renderer implements MeshSink {
     this.state.invalidate();
   }
 
+  /**
+   * Uploads a freshly baked indirect-light grid.
+   *
+   * The whole 768 KB goes at once rather than in slabs: it arrives about once
+   * a second, and one `texImage3D` is cheaper than the bookkeeping that
+   * tracking which slabs changed would need.
+   */
+  uploadGiVolume(result: GiResult): void {
+    const gl = this.gl;
+
+    if (!this.giVolume) {
+      const texture = gl.createTexture();
+      if (!texture) return;
+      this.giVolume = texture;
+      gl.bindTexture(gl.TEXTURE_3D, texture);
+      gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA8, GI_SIZE_XZ, GI_SIZE_Y, GI_SIZE_XZ);
+      // Horizontally the grid wraps with the world; vertically it covers the
+      // whole world already, so its top and bottom simply hold.
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    } else {
+      gl.bindTexture(gl.TEXTURE_3D, this.giVolume);
+    }
+
+    gl.texSubImage3D(
+      gl.TEXTURE_3D, 0, 0, 0, 0,
+      GI_SIZE_XZ, GI_SIZE_Y, GI_SIZE_XZ,
+      gl.RGBA, gl.UNSIGNED_BYTE, result.data,
+    );
+    gl.bindTexture(gl.TEXTURE_3D, null);
+    this.giReady = true;
+    this.state.invalidate();
+  }
+
   // -------------------------------------------------------------------------
   // Sizing
   // -------------------------------------------------------------------------
@@ -492,7 +536,8 @@ export class Renderer implements MeshSink {
       previous.skyViewSteps !== settings.skyViewSteps ||
       previous.parallaxEnabled !== settings.parallaxEnabled ||
       previous.parallaxSteps !== settings.parallaxSteps ||
-      previous.parallaxShadows !== settings.parallaxShadows;
+      previous.parallaxShadows !== settings.parallaxShadows ||
+      previous.giEnabled !== settings.giEnabled;
 
     if (needsPrograms) {
       // Programs are cheap to rebuild and this only happens from the settings
@@ -944,6 +989,21 @@ export class Renderer implements MeshSink {
     if (this.shadows) {
       this.state.bindTexture(6, gl.TEXTURE_2D_ARRAY, this.shadows.texture);
     }
+    // Unit 12 is the indirect-light grid's, bound or not: a sampler3D left
+    // pointing at unit 0 would collide with the 2D array bound there, and the
+    // strength is zero until the first bake lands anyway.
+    if (this.giVolume) this.state.bindTexture(12, gl.TEXTURE_3D, this.giVolume);
+    program.int('uGiVolume', 12);
+    // xyz = world-to-grid scale, w = strength. The grid is toroidal, so the
+    // texture coordinate is just the world position over the grid's extent and
+    // REPEAT does the wrapping.
+    program.vec4(
+      'uGiParams',
+      1 / (GI_SIZE_XZ * GI_CELL),
+      1 / (GI_SIZE_Y * GI_CELL),
+      1 / (GI_SIZE_XZ * GI_CELL),
+      this.giReady ? this.settings.giStrength : 0,
+    );
 
     program.int('uAlbedoArray', 0);
     program.int('uSurfaceArray', 1);

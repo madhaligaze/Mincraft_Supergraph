@@ -124,6 +124,7 @@ async function boot(): Promise<void> {
     world.lodEnabled = settings.lodEnabled;
     world.lodNearChunks = settings.lodNearChunks;
     world.lodFarChunks = settings.lodFarChunks;
+    world.giEnabled = settings.giEnabled;
   }
   applyWorldSettings();
 
@@ -310,7 +311,11 @@ async function boot(): Promise<void> {
       renderer.profiler.reset();
       return renderer.profiler.supported;
     },
-    /** 0 off, 1 AO, 2 skylight, 3 blocklight, 4 normal, 5 SSAO, 6 albedo, 7 tint. */
+    /**
+     * 0 off, 1 AO, 2 skylight, 3 blocklight, 4 normal, 5 SSAO, 6 albedo,
+     * 7 tint, 8 which pass painted the pixel, 9 texture AO, 10 height field,
+     * 11 indirect light, 12 how far the light grid is trusted.
+     */
     setDebugView(mode: number) { renderer.debugView = mode; },
     gpuTimings: () => renderer.profiler.snapshot(),
     cpuTimings: () => ({ ...cpu }),
@@ -460,6 +465,7 @@ async function boot(): Promise<void> {
     let mark = performance.now();
     world.update(player.position[0], player.position[2], world.usingWorkers ? 1 : 5);
     world.refreshAtlases();
+    world.updateIndirectLight(player.position[0], player.position[2], dt);
     accumulate('world', performance.now() - mark);
 
     // Nearby emissive blocks change slowly; rescanning every frame would be

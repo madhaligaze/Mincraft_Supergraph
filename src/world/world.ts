@@ -25,6 +25,8 @@ import { ChunkPipeline } from './pipeline.ts';
 import { TerrainGenerator } from './generator.ts';
 import type { SectionMeshResult, LodStep } from './mesher.ts';
 import type { WorkerRequest, WorkerResponse } from './chunkWorker.ts';
+import type { GiRequest, GiResponse } from './giWorker.ts';
+import { GI_CELL, GI_SIZE_XZ, type GiResult } from './gi.ts';
 import { Block, BLOCK_FLAGS, BlockFlag, isOpaque, growsGrass, BLOCK_LIGHT } from './blocks.ts';
 import { BIOMES, BIOME_WATER_RGB } from './biomes.ts';
 import { hash2i } from '../core/math.ts';
@@ -61,6 +63,8 @@ export interface MeshSink {
    * Layers: 0 grass tint, 1 foliage tint, 2 water tint, 3 surface info.
    */
   uploadAtlasTile(cx: number, cz: number, layers: Uint8Array[]): void;
+  /** Uploads a freshly baked indirect-light grid. */
+  uploadGiVolume(result: GiResult): void;
 }
 
 export interface WorldStats {
@@ -70,6 +74,8 @@ export interface WorldStats {
   pendingJobs: number;
   workers: number;
   shared: boolean;
+  /** Milliseconds the last indirect-light bake took; 0 when it is off. */
+  giBakeMs: number;
 }
 
 interface Job {
@@ -169,6 +175,21 @@ export class World {
    */
   private readonly uploadQueue: SectionMeshResult[] = [];
 
+  // --- indirect light ---
+
+  /** Off until the renderer asks for it; the bake is not free. */
+  giEnabled = false;
+  private giWorker: Worker | null = null;
+  private giInflight = false;
+  private giJobId = 1;
+  /** Grid origin of the last bake, in cells. */
+  private giOriginX = Number.NaN;
+  private giOriginZ = Number.NaN;
+  /** Seconds until the grid is rebuilt even if the player has not moved. */
+  private giTimer = 0;
+  /** Milliseconds the last bake took, for the stats overlay. */
+  giBakeMs = 0;
+
   constructor(seed: number, workerCount: number) {
     this.seed = seed;
 
@@ -183,6 +204,18 @@ export class World {
         this.workers.push(worker);
         this.workerLoad.push(0);
       }
+
+      // One more thread, outside the pool, for the indirect-light bake. It is
+      // idle almost all the time: a bake happens when the player has walked a
+      // grid cell or a couple of seconds have passed, not every frame.
+      this.giWorker = new Worker(new URL('./giWorker.ts', import.meta.url), {
+        type: 'module',
+      });
+      this.giWorker.onmessage = (event: MessageEvent<GiResponse>) => {
+        this.giInflight = false;
+        this.giBakeMs = event.data.ms;
+        this.sink?.uploadGiVolume(event.data.result);
+      };
     } else {
       // Without cross-origin isolation the workers cannot share the world, so
       // everything runs on the main thread under a per-frame time budget.
@@ -212,12 +245,15 @@ export class World {
       pendingJobs: this.jobQueue.length + this.inflight.size,
       workers: this.workers.length,
       shared: SHARED_MEMORY_AVAILABLE,
+      giBakeMs: this.giBakeMs,
     };
   }
 
   dispose(): void {
     for (const worker of this.workers) worker.terminate();
     this.workers.length = 0;
+    this.giWorker?.terminate();
+    this.giWorker = null;
     this.states.clear();
     this.store.clear();
   }
@@ -250,6 +286,33 @@ export class World {
     else this.runLocally(budgetMs);
 
     this.drainUploads();
+  }
+
+  /**
+   * Keeps the indirect-light grid up to date. Call once per frame.
+   *
+   * A bake is triggered by the player crossing a cell boundary — the grid is
+   * toroidal, so a step of four blocks invalidates one slab of it — or by a
+   * timer, which is what picks up light that changed for some other reason: a
+   * block placed nearby, or a chunk that finished loading inside the grid.
+   */
+  updateIndirectLight(cameraX: number, cameraZ: number, dt: number): void {
+    if (!this.giEnabled || !this.giWorker || this.giInflight) return;
+
+    // The player stands in the middle of the grid.
+    const originX = Math.floor(Math.floor(cameraX) / GI_CELL) - GI_SIZE_XZ / 2;
+    const originZ = Math.floor(Math.floor(cameraZ) / GI_CELL) - GI_SIZE_XZ / 2;
+
+    this.giTimer -= dt;
+    if (originX === this.giOriginX && originZ === this.giOriginZ && this.giTimer > 0) return;
+
+    this.giTimer = 2.5;
+    this.giOriginX = originX;
+    this.giOriginZ = originZ;
+    this.giInflight = true;
+    this.giWorker.postMessage({
+      type: 'build', id: this.giJobId++, originCellX: originX, originCellZ: originZ,
+    } satisfies GiRequest);
   }
 
   /**
@@ -324,6 +387,7 @@ export class World {
     if (newHandles.length > 0 && this.usingWorkers) {
       const message: WorkerRequest = { type: 'register', columns: newHandles };
       for (const worker of this.workers) worker.postMessage(message);
+      this.giWorker?.postMessage({ type: 'register', columns: newHandles } satisfies GiRequest);
     }
   }
 
@@ -360,6 +424,7 @@ export class World {
       if (this.usingWorkers) {
         const message: WorkerRequest = { type: 'unregister', columns: removed };
         for (const worker of this.workers) worker.postMessage(message);
+        this.giWorker?.postMessage({ type: 'unregister', columns: removed } satisfies GiRequest);
       }
     }
   }
@@ -738,6 +803,9 @@ export class World {
 
     this.markSectionsDirtyAround(x, y, z);
     this.queueDirty = true;
+    // An edit changes what bounces light. Not immediately — the relight has to
+    // land first — but soon enough that walling yourself in goes dark.
+    this.giTimer = Math.min(this.giTimer, 0.4);
     return true;
   }
 

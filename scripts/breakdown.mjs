@@ -27,6 +27,7 @@ const CASE_SETS = {
     { name: 'no clouds', changes: { cloudMode: 'off' } },
     { name: 'no shadows', changes: { shadowsEnabled: false } },
     { name: 'no ssao', changes: { ssaoEnabled: false } },
+    { name: 'no gi', changes: { giEnabled: false } },
     { name: 'no grass', changes: { grassEnabled: false } },
     { name: 'no taa', changes: { taaEnabled: false } },
     { name: 'half res', changes: { resolutionScale: 0.6 } },
