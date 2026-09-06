@@ -27,6 +27,7 @@ import type { SectionMeshResult, LodStep } from './mesher.ts';
 import type { WorkerRequest, WorkerResponse } from './chunkWorker.ts';
 import type { GiRequest, GiResponse } from './giWorker.ts';
 import { GI_CELL, GI_SIZE_XZ, type GiResult } from './gi.ts';
+import type { WorldSave } from './persistence.ts';
 import { Block, BLOCK_FLAGS, BlockFlag, isOpaque, growsGrass, BLOCK_LIGHT } from './blocks.ts';
 import { BIOMES, BIOME_WATER_RGB } from './biomes.ts';
 import { hash2i } from '../core/math.ts';
@@ -76,6 +77,8 @@ export interface WorldStats {
   shared: boolean;
   /** Milliseconds the last indirect-light bake took; 0 when it is off. */
   giBakeMs: number;
+  /** Player edits held in the save. */
+  savedEdits: number;
 }
 
 interface Job {
@@ -190,6 +193,18 @@ export class World {
   /** Milliseconds the last bake took, for the stats overlay. */
   giBakeMs = 0;
 
+  // --- saving ---
+
+  /**
+   * Player edits, kept as a difference against the generated world.
+   *
+   * Attached before streaming starts, so that every column that arrives can be
+   * patched the moment generation finishes and before anything — lighting,
+   * meshing, the indirect-light bake — has read it.
+   */
+  private save: WorldSave | null = null;
+  private saveTimer = 0;
+
   constructor(seed: number, workerCount: number) {
     this.seed = seed;
 
@@ -246,6 +261,7 @@ export class World {
       workers: this.workers.length,
       shared: SHARED_MEMORY_AVAILABLE,
       giBakeMs: this.giBakeMs,
+      savedEdits: this.savedEdits,
     };
   }
 
@@ -579,9 +595,64 @@ export class World {
     const state = this.states.get(chunkKey(cx, cz));
     if (!state) return;
     const column = this.store.get(cx, cz);
-    if (column) column.generated = true;
+    if (column) {
+      column.generated = true;
+      this.applySavedEdits(column);
+    }
     state.stage = ok || column?.generated ? Stage.Generated : Stage.Empty;
     this.queueDirty = true;
+  }
+
+  /**
+   * Replays the player's edits onto a freshly generated column.
+   *
+   * Runs between generation and lighting, which is the only window where it is
+   * both possible and free: the terrain exists, and nothing has read it yet, so
+   * the light and the mesh come out right the first time instead of needing to
+   * be thrown away and rebuilt.
+   */
+  private applySavedEdits(column: ColumnData): void {
+    const edits = this.save?.get(column.x, column.z);
+    if (!edits || edits.size === 0) return;
+
+    const touched = new Set<number>();
+    for (const [index, block] of edits) {
+      column.blocks[index] = block;
+      // The column index packs y, z and x; the heightmap only cares about the
+      // horizontal part.
+      touched.add(index & 0x3ff);
+    }
+    for (const area of touched) {
+      this.refreshHeightmaps(column, area & CHUNK_MASK, area >> 5);
+    }
+  }
+
+  /** Attaches the save store. Call before any column has been generated. */
+  attachSave(save: WorldSave): void {
+    this.save = save;
+  }
+
+  /**
+   * Writes pending edits, at most once every few seconds.
+   *
+   * Called every frame; the interval is what keeps a burst of building from
+   * turning into a burst of transactions.
+   */
+  updateSave(dt: number): void {
+    if (!this.save || this.save.dirtyColumns === 0) return;
+    this.saveTimer -= dt;
+    if (this.saveTimer > 0) return;
+    this.saveTimer = 4;
+    void this.save.flush();
+  }
+
+  /** Writes immediately, for the page going away. */
+  flushSave(): Promise<void> {
+    return this.save?.flush() ?? Promise.resolve();
+  }
+
+  get savedEdits(): number {
+    return this.save?.totalEdits ?? 0;
   }
 
   private onLit(cx: number, cz: number, ok: boolean): void {
@@ -787,7 +858,9 @@ export class World {
     const previous = column.blocks[columnIndex(lx, y, lz)];
     if (previous === block) return false;
 
-    column.blocks[columnIndex(lx, y, lz)] = block;
+    const index = columnIndex(lx, y, lz);
+    column.blocks[index] = block;
+    this.save?.record(cx, cz, index, block);
     this.refreshHeightmaps(column, lx, lz);
 
     // Relight this column and any neighbour whose 4-block light skirt reaches

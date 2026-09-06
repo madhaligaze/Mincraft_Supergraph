@@ -7,6 +7,7 @@ import './ui/style.css';
 import { createContext, WebGL2UnavailableError } from './render/gl.ts';
 import { Renderer, type FrameState } from './render/renderer.ts';
 import { World } from './world/world.ts';
+import { WorldSave } from './world/persistence.ts';
 import { Player } from './player/player.ts';
 import { Input } from './core/input.ts';
 import { AudioEngine } from './audio/audio.ts';
@@ -117,6 +118,12 @@ async function boot(): Promise<void> {
   const workerCount = clamp((navigator.hardwareConcurrency ?? 4) - 1, 1, 6);
   const world = new World(seed, workerCount);
   world.setSink(renderer);
+
+  // Before anything streams: a column that arrives with saved edits has to be
+  // patched before it is lit, and that is only possible if the edits are
+  // already in memory.
+  setProgress(0.63, 'загрузка сохранения…');
+  world.attachSave(await WorldSave.open(seed));
 
   /** Copies the streaming and detail-level settings into the world. */
   function applyWorldSettings(): void {
@@ -373,6 +380,14 @@ async function boot(): Promise<void> {
     void audio.start(settings.audioVolume);
   });
 
+  // The two moments a browser gives to write something down: the tab going
+  // away for good, and the tab going into the background — which on a phone is
+  // the same thing, because it may never come back.
+  window.addEventListener('pagehide', () => { void world.flushSave(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') void world.flushSave();
+  });
+
   document.addEventListener('pointerlockchange', () => {
     if (!input.locked && running) {
       overlay.hidden = false;
@@ -466,6 +481,7 @@ async function boot(): Promise<void> {
     world.update(player.position[0], player.position[2], world.usingWorkers ? 1 : 5);
     world.refreshAtlases();
     world.updateIndirectLight(player.position[0], player.position[2], dt);
+    world.updateSave(dt);
     accumulate('world', performance.now() - mark);
 
     // Nearby emissive blocks change slowly; rescanning every frame would be

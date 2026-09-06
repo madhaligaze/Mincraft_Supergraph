@@ -139,7 +139,7 @@ export class Hud {
     clock: string;
     rain: number;
     wind: number;
-    world: { columns: number; generated: number; lit: number; pendingJobs: number; workers: number; shared: boolean; giBakeMs: number };
+    world: { columns: number; generated: number; lit: number; pendingJobs: number; workers: number; shared: boolean; giBakeMs: number; savedEdits: number };
     render: { drawCalls: number; visibleQuads: number; totalQuads: number; sections: number; shadowDraws: number; internalWidth: number; internalHeight: number };
     renderer: string;
     facing: string;
@@ -189,6 +189,7 @@ export class Hud {
       `чанки ${w.lit}/${w.generated}/${w.columns} (свет/ген/всего)`,
       `очередь ${w.pendingJobs}   воркеры ${w.workers}   SAB ${w.shared ? 'да' : 'нет'}`,
       `непрямой свет ${w.giBakeMs > 0 ? `${w.giBakeMs.toFixed(0)} мс на выпечку` : 'выкл'}`,
+      `сохранено ${w.savedEdits} правок`,
     ];
 
     this.statsEl.textContent = lines.join('\n');
