@@ -294,9 +294,10 @@ export class Hud {
     this.addSlider('Сила непрямого', 'giStrength', 0, 2, 0.1, (v) => v.toFixed(1));
 
     this.addSectionTitle('Рельеф поверхности');
+    this.addSlider('Сила нормалей', 'surfaceDetail', 0, 1, 0.05, (v) => v.toFixed(2));
     this.addToggle('Параллакс', 'parallaxEnabled');
     this.addSlider('Шаги параллакса', 'parallaxSteps', 4, 48, 4, (v) => String(v));
-    this.addSlider('Глубина рельефа', 'parallaxDepth', 0.02, 0.14, 0.01, (v) => v.toFixed(2));
+    this.addSlider('Глубина рельефа', 'parallaxDepth', 0.01, 0.1, 0.005, (v) => v.toFixed(3));
     this.addSlider('Дальность рельефа', 'parallaxDistance', 6, 40, 2, (v) => `${v} бл.`);
     this.addToggle('Самозатенение рельефа', 'parallaxShadows');
 
@@ -305,6 +306,7 @@ export class Hud {
     this.addToggle('Объёмные лучи', 'lightShafts');
     this.addSlider('Сила лучей', 'lightShaftStrength', 0, 1.5, 0.1, (v) => v.toFixed(1));
     this.addSlider('Шаги облаков', 'cloudSteps', 0, 64, 4, (v) => (v === 0 ? 'выкл' : String(v)));
+    this.addSlider('Облачность', 'cloudCoverage', 0, 0.9, 0.05, (v) => `${Math.round(v * 100)}%`);
     this.addToggle('Отражения воды', 'waterReflections');
     this.addSlider('Шаги SSR', 'ssrSteps', 0, 48, 4, (v) => (v === 0 ? 'выкл' : String(v)));
     this.addToggle('Отражения на мокром', 'wetReflections');
