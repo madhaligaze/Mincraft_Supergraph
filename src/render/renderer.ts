@@ -103,6 +103,10 @@ export interface FrameState {
   underwater: boolean;
   /** Linear RGB tint of the water the camera is inside. */
   underwaterTint: Vec3;
+  /** How far the camera is below the surface, 0..1 over the first ~20 blocks. */
+  underwaterDepth: number;
+  /** Remaining breath, 1 full to 0 empty. Closes the vignette as it empties. */
+  breath: number;
   /** Flat [x, y, z, intensity] tuples. */
   pointLights: Float32Array;
   pointLightCount: number;
@@ -1700,7 +1704,11 @@ export class Renderer implements MeshSink {
     program.vec2('uExposureLimits', 0.02, 160.0);
 
     program.float('uBloomStrength', bloom ? s.bloomStrength : 0);
-    program.float('uVignette', s.vignette);
+    // The vignette closes in as breath runs out. Nothing else in the frame says
+    // the player is in trouble — there is no health bar to drain — so the frame
+    // itself has to, and darkening the edges of vision is what running out of
+    // air actually feels like.
+    program.float('uVignette', s.vignette + (1 - frame.breath) * 0.85);
     program.float('uChromaticAberration', s.chromaticAberration);
     program.float('uFilmGrain', s.filmGrain);
     program.float('uContrast', 1.06);
@@ -1711,8 +1719,10 @@ export class Renderer implements MeshSink {
         'uUnderwater',
         frame.underwaterTint[0], frame.underwaterTint[1], frame.underwaterTint[2], 1,
       );
+      program.float('uUnderwaterDepth', frame.underwaterDepth);
     } else {
       program.vec4('uUnderwater', 0, 0, 0, 0);
+      program.float('uUnderwaterDepth', 0);
     }
 
     this.state.bindVAO(this.triangle.handle);

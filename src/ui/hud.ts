@@ -38,15 +38,23 @@ export interface HudCallbacks {
   onSettingsChange(settings: Settings, preset: PresetName): void;
 }
 
+/** Bubbles in the breath meter. Coarse on purpose; see `updateBreath`. */
+const BREATH_BUBBLES = 10;
+
 export class Hud {
   private readonly hotbarEl: HTMLElement;
   private readonly statsEl: HTMLElement;
   private readonly settingsEl: HTMLElement;
   private readonly crosshairEl: HTMLElement;
   private readonly hudEl: HTMLElement;
+  private readonly breathEl: HTMLElement;
 
   private slots: HTMLElement[] = [];
   private activeSlot = -1;
+
+  private bubbles: HTMLElement[] = [];
+  private bubblesLeft = -1;
+  private breathHidden = true;
 
   private statsVisible = false;
   private settingsVisible = false;
@@ -70,6 +78,7 @@ export class Hud {
     this.settingsEl = document.getElementById('settings')!;
     this.crosshairEl = document.getElementById('crosshair')!;
     this.hudEl = document.getElementById('hud')!;
+    this.breathEl = document.getElementById('breath')!;
 
     this.buildHotbar();
     this.buildSettings();
@@ -121,6 +130,42 @@ export class Hud {
 
   get settingsOpen(): boolean {
     return this.settingsVisible;
+  }
+
+  /**
+   * Shows the breath meter while it means something.
+   *
+   * `breath` is 1 when full. The row appears the moment it starts draining and
+   * stays until it is full again, so surfacing gives visible confirmation that
+   * it is refilling rather than just making the indicator vanish.
+   */
+  updateBreath(breath: number): void {
+    const spent = breath >= 0.999;
+    if (spent !== this.breathHidden) {
+      this.breathHidden = spent;
+      this.breathEl.hidden = spent;
+    }
+    if (spent) return;
+
+    if (this.bubbles.length === 0) {
+      for (let i = 0; i < BREATH_BUBBLES; i++) {
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        this.breathEl.appendChild(bubble);
+        this.bubbles.push(bubble);
+      }
+    }
+
+    // Ceil, so the last sliver of air still shows one bubble: an empty row and
+    // an almost-empty row must not look the same.
+    const left = Math.ceil(breath * BREATH_BUBBLES);
+    if (left !== this.bubblesLeft) {
+      this.bubblesLeft = left;
+      for (let i = 0; i < BREATH_BUBBLES; i++) {
+        this.bubbles[i].classList.toggle('spent', i >= left);
+      }
+      this.breathEl.classList.toggle('low', left <= 3);
+    }
   }
 
   // -------------------------------------------------------------------------

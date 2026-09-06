@@ -55,6 +55,15 @@ export const POSITION_SCALE = 8;
  */
 export const POSITION_BIAS = POSITION_SCALE;
 
+/**
+ * Largest greedy rectangle allowed on a liquid's top face, in cells.
+ *
+ * Everything else merges without limit. This one cannot: the surface is
+ * displaced per vertex, and a quad that spans more than a few blocks folds
+ * along its own diagonal. See the note in `mergeMask`.
+ */
+const LIQUID_SURFACE_MERGE = 4;
+
 export const enum TintMode {
   None = 0,
   Grass = 1,
@@ -654,12 +663,31 @@ export class Mesher {
           this.maskBlockLight[other] === bl &&
           this.maskTint[other] === tint;
 
+        // The water surface is the one face with a limit on how far it may
+        // merge, and the reason is that it is the one face that moves.
+        //
+        // Wave displacement happens per vertex, so a quad only samples the wave
+        // at its four corners. Merged across a whole section, an ocean top is
+        // one quad thirty blocks wide whose corners sit at four unrelated
+        // points of the wave — the four are not coplanar, the two triangles
+        // fold along their shared diagonal, and that fold reads as a straight
+        // line running across the sea to the vanishing point. Those were the
+        // thin bright wires over the water.
+        //
+        // Four blocks is well under the shortest wave in the sum, so the fold
+        // is smaller than the surface's own curvature. The extra quads are
+        // cheap: an ocean section's top goes from one to sixty-four, against a
+        // frame that already draws quads in the hundreds of thousands.
+        const limit = BLOCK_RENDER[block] === RenderKind.Liquid && face === FACE_PY
+          ? LIQUID_SURFACE_MERGE
+          : S;
+
         // Extend along u, then along v while the whole row still matches.
         let w = 1;
-        while (ui + w < S && matches(cell + w)) w++;
+        while (w < limit && ui + w < S && matches(cell + w)) w++;
 
         let h = 1;
-        outer: while (vi + h < S) {
+        outer: while (h < limit && vi + h < S) {
           const rowBase = (vi + h) * S + ui;
           for (let k = 0; k < w; k++) {
             if (!matches(rowBase + k)) break outer;

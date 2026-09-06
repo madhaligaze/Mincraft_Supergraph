@@ -357,6 +357,8 @@ async function boot(): Promise<void> {
     selection: null,
     underwater: false,
     underwaterTint,
+    underwaterDepth: 0,
+    breath: 1,
     pointLights,
     pointLightCount: 0,
     biomeFog: 1,
@@ -524,6 +526,9 @@ async function boot(): Promise<void> {
     );
     frame.biomeFog = BIOME_FOG_DENSITY[biome] || 1;
     frame.underwater = player.headUnderwater;
+    frame.underwaterDepth = player.submersion;
+    frame.breath = player.breath;
+    hud.updateBreath(player.breath);
     underwaterTint[0] = BIOME_WATER_RGB[biome * 3];
     underwaterTint[1] = BIOME_WATER_RGB[biome * 3 + 1];
     underwaterTint[2] = BIOME_WATER_RGB[biome * 3 + 2];

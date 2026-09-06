@@ -174,7 +174,7 @@ const home3 = home ?? { x: 0, y: 70, z: 0 };
 // --- 1. into the sun ---
 await shoot('sun', `(() => {
   const api = window.supergraph;
-  api.teleport(${home3.x}.5, ${home3.y} + 1.7, ${home3.z}.5);
+  api.teleport(${home3.x} + 0.5, ${home3.y} + 1.7, ${home3.z} + 0.5);
   api.faceSun(0.16, 0.03);
   return true;
 })()`);
@@ -182,7 +182,7 @@ await shoot('sun', `(() => {
 // --- 2. the surface underfoot, at a grazing angle ---
 await shoot('ground', `(() => {
   const api = window.supergraph;
-  api.teleport(${home3.x}.5, ${home3.y} + 1.7, ${home3.z}.5);
+  api.teleport(${home3.x} + 0.5, ${home3.y} + 1.7, ${home3.z} + 0.5);
   api.faceSun(1.9, -0.62);
   return true;
 })()`);
@@ -190,7 +190,7 @@ await shoot('ground', `(() => {
 // --- 3. straight down at a block boundary ---
 await shoot('blocks', `(() => {
   const api = window.supergraph;
-  api.teleport(${home3.x}.5, ${home3.y} + 1.7, ${home3.z}.5);
+  api.teleport(${home3.x} + 0.5, ${home3.y} + 1.7, ${home3.z} + 0.5);
   api.faceSun(2.4, -1.15);
   return true;
 })()`);
@@ -220,7 +220,7 @@ if (shore) {
   await new Promise((r) => setTimeout(r, 14000));
   await shoot('sea', `(() => {
     const api = window.supergraph;
-    api.teleport(${shore.x}.5, ${shore.y} + 1.7, ${shore.z}.5);
+    api.teleport(${shore.x} + 0.5, ${shore.y} + 1.7, ${shore.z} + 0.5);
     api.faceSun(2.1, -0.12);
     return true;
   })()`);
@@ -233,7 +233,7 @@ if (deep) {
   await new Promise((r) => setTimeout(r, 14000));
   await shoot('under', `(() => {
     const api = window.supergraph;
-    api.teleport(${deep.x}.5, ${deep.y}, ${deep.z}.5);
+    api.teleport(${deep.x} + 0.5, ${deep.y}, ${deep.z} + 0.5);
     api.faceSun(1.2, -0.05);
     return true;
   })()`);
@@ -244,7 +244,7 @@ await page.evaluate((h) => window.supergraph.teleport(h.x + 0.5, h.y + 95, h.z +
 await new Promise((r) => setTimeout(r, 16000));
 await shoot('air', `(() => {
   const api = window.supergraph;
-  api.teleport(${home3.x}.5, ${home3.y} + 95, ${home3.z}.5);
+  api.teleport(${home3.x} + 0.5, ${home3.y} + 95, ${home3.z} + 0.5);
   api.faceSun(2.2, -0.34);
   return true;
 })()`, 16000);

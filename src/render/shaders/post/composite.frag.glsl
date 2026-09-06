@@ -26,8 +26,13 @@ uniform float uChromaticAberration;
 uniform float uFilmGrain;
 uniform float uContrast;
 uniform float uSaturation;
-/** Non-zero while the camera is submerged; rgb is the tint. */
+/** Non-zero while the camera is submerged; rgb is the water's colour. */
 uniform vec4 uUnderwater;
+/** How far the camera is below the surface, 0..1 over `SUBMERSION_BLOCKS`. */
+uniform float uUnderwaterDepth;
+
+/** Must match SUBMERSION_DEPTH in player/player.ts. */
+const float SUBMERSION_BLOCKS = 20.0;
 
 in vec2 vUv;
 out vec4 fragColor;
@@ -55,14 +60,65 @@ void main() {
   }
 
   // --- underwater ---
+  //
+  // Everything about being submerged happens in this one pass over the finished
+  // frame. That is not a shortcut, it is the only affordable place: the
+  // alternative is a variant of every shading program in the engine, and what
+  // is being modelled — extinction along the view ray through a uniform
+  // medium — is a function of depth and distance, both of which are here.
+  //
+  // What used to be here was a tint scaled by `0.14 + 0.5 * uSunDirection.w`,
+  // and that `w` is the sun's *intensity*, thirteen, not a zero-to-one factor.
+  // The tint therefore came out several times brighter than anything it was
+  // tinting, which is why being underwater looked like standing in a lit cyan
+  // fog rather than being in water. The daylight fraction lives in uSunColor.a.
   if (uUnderwater.a > 0.001) {
     float depth = texture(uSceneDepth, uv).r;
-    float dist = depth > 0.0 ? linearDepth(depth) : 120.0;
-    float absorb = 1.0 - exp(-dist * 0.055);
-    color = mix(color, uUnderwater.rgb * (0.14 + 0.5 * uSunDirection.w), absorb * uUnderwater.a);
-    // Caustic-ish shimmer over the whole frame.
-    float shimmer = sin(uv.x * 42.0 + SCENE_TIME * 1.9) * sin(uv.y * 37.0 - SCENE_TIME * 1.4);
-    color *= 1.0 + shimmer * 0.035 * uUnderwater.a;
+    // Sky pixels are not at infinity down here — they are the surface, a long
+    // way off through a medium that will have absorbed everything by then.
+    float dist = depth > 0.0 ? linearDepth(depth) : 240.0;
+
+    // Beer-Lambert per channel. Red goes first by a wide margin — a couple of
+    // metres of water take most of it — which is why everything under water is
+    // blue-green and why a torch down there lights nothing.
+    vec3 extinction = vec3(0.34, 0.075, 0.05);
+
+    // Downwelling: the light that reaches anything down here came *down*
+    // through the column above the camera and was filtered before it ever hit
+    // a surface, so this tints and dims the whole frame regardless of how close
+    // the surface is.
+    //
+    // This is the term that was missing, and its absence is exactly the
+    // complaint: with only the view-ray extinction below, the far distance went
+    // blue while the sand two metres away stayed sunlit yellow, and the result
+    // read as a dry scene with a blue haze rather than as being under water.
+    // Depth is in blocks; the factor accounts for the sun coming in at an angle
+    // and for scattered light arriving by shorter paths than the vertical.
+    float aboveBlocks = uUnderwaterDepth * SUBMERSION_BLOCKS + 1.5;
+    vec3 downwelling = exp(-extinction * aboveBlocks * 0.55);
+    color *= downwelling;
+
+    // The water's own colour, lit by that same filtered light: what the frame
+    // fades to once the view ray is long enough that nothing survives it.
+    float daylight = 0.05 + 0.95 * uSunColor.a;
+    vec3 medium = uUnderwater.rgb * daylight * downwelling * 0.9;
+
+    vec3 through = exp(-extinction * dist);
+    color = color * through + medium * (vec3(1.0) - through);
+
+    // Caustics: light focused by the surface above, so it rides on world
+    // position rather than on the screen. Two sheets of noise crossing at an
+    // angle and beating against each other is the cheapest thing that reads as
+    // caustics, and near the surface in daylight is the only place it shows.
+    vec3 worldPos = worldFromDepth(uv, max(depth, 1e-6));
+    vec2 c = worldPos.xz * 0.55 + worldPos.y * 0.12;
+    float caustic =
+      sin(c.x + SCENE_TIME * 1.35) * sin(c.y * 1.17 - SCENE_TIME * 1.05) +
+      sin(c.x * 1.63 - SCENE_TIME * 0.9) * sin(c.y * 0.79 + SCENE_TIME * 1.6);
+    caustic = saturate(caustic * 0.5 + 0.5);
+    float causticFade = (1.0 - uUnderwaterDepth) * uSunColor.a *
+      exp(-dist * 0.045);
+    color += medium * pow(caustic, 3.0) * causticFade * 1.6;
   }
 
   // Auto exposure. Without it the scene has to be authored for one time of

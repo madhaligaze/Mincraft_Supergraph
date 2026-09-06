@@ -37,6 +37,15 @@ const AIR_FRICTION = 0.6;
 
 const REACH = 6.0;
 
+/** Depth over which the water around the camera reaches its darkest, in blocks. */
+const SUBMERSION_DEPTH = 20;
+/** How long a full breath lasts underwater. */
+const BREATH_SECONDS = 22;
+/** How long recovering a full breath at the surface takes. */
+const BREATH_REFILL_SECONDS = 3.5;
+/** How much slower an out-of-breath swimmer is. */
+const DROWNING_SPEED = 0.55;
+
 /** What an interaction did to the world, for the caller to react to. */
 export interface BlockEvent {
   kind: 'break' | 'place';
@@ -68,6 +77,20 @@ export class Player {
   flying = false;
   sprinting = false;
   sneaking = false;
+
+  /**
+   * How deep the head is, 0..1 over the first `SUBMERSION_DEPTH` blocks.
+   *
+   * The renderer uses it to decide how dark the water is around the camera.
+   * Depth is the difference between being just under the surface and being
+   * twenty blocks down, and without it both look identical.
+   */
+  submersion = 0;
+
+  /** Remaining breath, 1 full to 0 empty. */
+  breath = 1;
+  /** True once breath has run out and the player is being pressed to surface. */
+  drowning = false;
 
   hotbarIndex = 0;
 
@@ -107,7 +130,7 @@ export class Player {
 
     this.sneaking = this.input.isDown('ShiftLeft') || this.input.isDown('ShiftRight');
 
-    this.updateFluidState();
+    this.updateFluidState(dt);
     this.move(dt);
     this.updateCamera(dt, baseFov);
   }
@@ -131,7 +154,7 @@ export class Player {
     }
   }
 
-  private updateFluidState(): void {
+  private updateFluidState(dt: number): void {
     const feetBlock = this.world.getBlock(
       Math.floor(this.position[0]),
       Math.floor(this.position[1] + 0.2),
@@ -139,12 +162,33 @@ export class Player {
     );
     this.inFluid = isFluid(feetBlock);
 
-    const eyeBlock = this.world.getBlock(
-      Math.floor(this.position[0]),
-      Math.floor(this.position[1] + this.eyeHeight),
-      Math.floor(this.position[2]),
-    );
-    this.headUnderwater = eyeBlock === Block.Water;
+    const x = Math.floor(this.position[0]);
+    const z = Math.floor(this.position[2]);
+    const eyeY = Math.floor(this.position[1] + this.eyeHeight);
+    this.headUnderwater = this.world.getBlock(x, eyeY, z) === Block.Water;
+
+    if (this.headUnderwater) {
+      // Walk up to the surface to find out how deep this is. The scan is
+      // capped, so it costs a fixed handful of lookups a frame however deep the
+      // ocean gets — and past the cap it is as dark as it is going to get.
+      let above = 0;
+      while (
+        above < SUBMERSION_DEPTH &&
+        this.world.getBlock(x, eyeY + above + 1, z) === Block.Water
+      ) {
+        above++;
+      }
+      this.submersion = above / SUBMERSION_DEPTH;
+      this.breath = Math.max(0, this.breath - dt / BREATH_SECONDS);
+    } else {
+      this.submersion = 0;
+      // Refilling is much faster than draining: surfacing for a moment should
+      // be enough to go back down, or the sea becomes somewhere to look at
+      // rather than somewhere to swim.
+      this.breath = Math.min(1, this.breath + dt / BREATH_REFILL_SECONDS);
+    }
+
+    this.drowning = this.breath <= 0;
   }
 
   private move(dt: number): void {
@@ -179,11 +223,17 @@ export class Player {
       return;
     }
 
-    const targetSpeed = this.inFluid
+    // Out of breath is slower. There is no health system to take damage from,
+    // so the pressure to surface has to be something the player feels in the
+    // controls; combined with the vignette closing in, it reads clearly enough
+    // to change what the player does.
+    const drowningFactor = this.drowning ? DROWNING_SPEED : 1;
+
+    const targetSpeed = (this.inFluid
       ? SWIM_SPEED
       : this.sneaking
         ? SNEAK_SPEED
-        : this.sprinting ? SPRINT_SPEED : WALK_SPEED;
+        : this.sprinting ? SPRINT_SPEED : WALK_SPEED) * drowningFactor;
 
     const acceleration = this.onGround ? GROUND_ACCELERATION : AIR_ACCELERATION;
     const friction = this.onGround ? GROUND_FRICTION : AIR_FRICTION;
@@ -212,7 +262,7 @@ export class Player {
     // Vertical.
     if (this.inFluid) {
       this.velocity[1] -= GRAVITY * 0.28 * dt;
-      if (input.isDown('Space')) this.velocity[1] += 22 * dt;
+      if (input.isDown('Space')) this.velocity[1] += 22 * drowningFactor * dt;
       this.velocity[1] *= Math.exp(-4.2 * dt);
     } else {
       this.velocity[1] -= GRAVITY * dt;
