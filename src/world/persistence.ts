@@ -18,6 +18,15 @@
  * the moment it arrives, before anything reads it.
  */
 
+/** Where the player was and what the sky was doing. One record per world. */
+export interface SavedState {
+  x: number; y: number; z: number;
+  yaw: number; pitch: number;
+  /** 0..1 through the day. */
+  time: number;
+  hotbar: number;
+}
+
 const DB_NAME = 'supergraph';
 const DB_VERSION = 1;
 const STORE = 'edits';
@@ -58,6 +67,10 @@ export class WorldSave {
   private readonly dirty = new Set<string>();
   private flushing = false;
 
+  /** The player's own record. Keyed apart from the columns by the '@' prefix. */
+  private playerState: SavedState | null = null;
+  private stateDirty = false;
+
   private constructor(
     private readonly db: IDBDatabase | null,
     private readonly seed: number,
@@ -88,7 +101,9 @@ export class WorldSave {
         const cursor = request.result;
         if (!cursor) { resolve(); return; }
         const key = String(cursor.key);
-        if (key.startsWith(prefix)) {
+        if (key === `${prefix}@state`) {
+          this.playerState = cursor.value as SavedState;
+        } else if (key.startsWith(prefix)) {
           const packed = cursor.value as Uint32Array;
           const map = new Map<number, number>();
           for (const word of packed) map.set(editIndex(word), editBlock(word));
@@ -98,6 +113,25 @@ export class WorldSave {
       };
       request.onerror = () => resolve();
     });
+  }
+
+  /** Where the player left off, or null for a world never visited. */
+  get state(): SavedState | null {
+    return this.playerState;
+  }
+
+  /**
+   * Remembers the player's position. Called every frame, so it does nothing
+   * until something has actually moved: writing is what costs, not comparing.
+   */
+  recordState(next: SavedState): void {
+    const prev = this.playerState;
+    if (prev &&
+      Math.abs(prev.x - next.x) < 0.5 && Math.abs(prev.y - next.y) < 0.5 &&
+      Math.abs(prev.z - next.z) < 0.5 && Math.abs(prev.time - next.time) < 0.004 &&
+      prev.hotbar === next.hotbar) return;
+    this.playerState = next;
+    this.stateDirty = true;
   }
 
   /** Edits for one column, or null. Synchronous by design. */
@@ -135,7 +169,8 @@ export class WorldSave {
    * tracking individual words.
    */
   async flush(): Promise<void> {
-    if (!this.db || this.flushing || this.dirty.size === 0) return;
+    if (!this.db || this.flushing) return;
+    if (this.dirty.size === 0 && !this.stateDirty) return;
     this.flushing = true;
 
     const keys = [...this.dirty];
@@ -144,6 +179,11 @@ export class WorldSave {
     await new Promise<void>((resolve) => {
       const tx = this.db!.transaction(STORE, 'readwrite');
       const store = tx.objectStore(STORE);
+
+      if (this.stateDirty && this.playerState) {
+        store.put(this.playerState, `${this.seed}/@state`);
+        this.stateDirty = false;
+      }
 
       for (const key of keys) {
         const map = this.columns.get(key);

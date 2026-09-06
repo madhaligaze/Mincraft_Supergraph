@@ -62,11 +62,22 @@ const built = await page.evaluate(async () => {
       await new Promise((r) => setTimeout(r, 300));
     }
   }
+  // Move somewhere distinctive so the resume can be checked too.
+  api.teleport(x + 12.5, y + 1.05, z - 7.5);
+  api.look(1.234, -0.321);
+  api.setTime(0.61);
+  // The player's own record is written by the frame loop, and a software-
+  // rendered frame here takes the better part of a second: give it a few.
+  await new Promise((r) => setTimeout(r, 3000));
   await api.world.flushSave();
-  return { x, y, z, placed: placed.length, edits: api.world.savedEdits };
+  const p = api.player.position;
+  return {
+    x, y, z, placed, edits: api.world.savedEdits,
+    at: [p[0], p[1], p[2]], yaw: api.player.yaw,
+  };
 });
 
-console.log(`поставлено ${built.placed} блоков на ${built.x},${built.y + 3},${built.z}; правок в сохранении: ${built.edits}`);
+console.log(`поставлено ${built.placed.length} блоков на ${built.x},${built.y + 3},${built.z}; правок в сохранении: ${built.edits}`);
 
 // --- reload: the world is regenerated from the seed, edits replayed on top ---
 await page.reload({ waitUntil: 'domcontentloaded', timeout: 120000 });
@@ -75,6 +86,8 @@ await new Promise((r) => setTimeout(r, 20000));
 
 const found = await page.evaluate(async ({ x, y, z, placed }) => {
   const api = window.supergraph;
+  const p = api.player.position;
+  const resumed = { at: [p[0], p[1], p[2]], yaw: api.player.yaw };
   api.teleport(x + 0.5, y + 0.05, z + 0.5);
 
   // The column has to stream in again before it can be asked anything.
@@ -84,14 +97,19 @@ const found = await page.evaluate(async ({ x, y, z, placed }) => {
   }
 
   const blocks = [];
-  for (let i = 0; i < placed; i++) blocks.push(api.world.getBlock(x + i, y + 3, z));
-  return { blocks, edits: api.world.savedEdits };
+  for (const bx of placed) blocks.push(api.world.getBlock(bx, y + 3, z));
+  return { blocks, edits: api.world.savedEdits, resumed };
 }, built);
 
 console.log(`после перезагрузки: блоки ${found.blocks.join(', ')}, правок загружено: ${found.edits}`);
+const moved = Math.hypot(
+  found.resumed.at[0] - built.at[0], found.resumed.at[2] - built.at[2],
+);
+console.log(`игрок продолжил с ${found.resumed.at.map((v) => v.toFixed(1)).join(', ')} ` +
+  `(отклонение от сохранённого ${moved.toFixed(2)} блока, поворот ${found.resumed.yaw.toFixed(3)})`);
 
 let status = 0;
-if (built.placed === 0) {
+if (built.placed.length === 0) {
   console.log('\nне удалось поставить ни одного блока — тест ничего не проверил');
   status = 1;
 } else if (found.blocks.some((b) => b !== 29)) {
@@ -99,6 +117,10 @@ if (built.placed === 0) {
   status = 1;
 } else if (found.edits !== built.edits) {
   console.log(`\nсохранение прочиталось не целиком: было ${built.edits}, стало ${found.edits}`);
+  status = 1;
+}
+if (moved > 1.5 || Math.abs(found.resumed.yaw - built.yaw) > 0.01) {
+  console.log('\nигрок не продолжил с сохранённого места');
   status = 1;
 }
 if (problems.length) {

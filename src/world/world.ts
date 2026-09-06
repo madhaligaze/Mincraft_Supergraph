@@ -27,7 +27,7 @@ import type { SectionMeshResult, LodStep } from './mesher.ts';
 import type { WorkerRequest, WorkerResponse } from './chunkWorker.ts';
 import type { GiRequest, GiResponse } from './giWorker.ts';
 import { GI_CELL, GI_SIZE_XZ, type GiResult } from './gi.ts';
-import type { WorldSave } from './persistence.ts';
+import type { WorldSave, SavedState } from './persistence.ts';
 import { Block, BLOCK_FLAGS, BlockFlag, isOpaque, growsGrass, BLOCK_LIGHT } from './blocks.ts';
 import { BIOMES, BIOME_WATER_RGB } from './biomes.ts';
 import { hash2i } from '../core/math.ts';
@@ -644,6 +644,16 @@ export class World {
     if (this.saveTimer > 0) return;
     this.saveTimer = 4;
     void this.save.flush();
+  }
+
+  /** Where the player left off, or null for a world never visited. */
+  get savedState(): SavedState | null {
+    return this.save?.state ?? null;
+  }
+
+  /** Remembers the player's position; written out with the next flush. */
+  recordPlayerState(state: SavedState): void {
+    this.save?.recordState(state);
   }
 
   /** Writes immediately, for the page going away. */

@@ -138,8 +138,19 @@ async function boot(): Promise<void> {
   const input = new Input(canvas);
   const player = new Player(world, input);
 
-  const spawn = world.findSpawn();
+  // A world that has been visited resumes where it was left; a new one starts
+  // at a spawn point the generator picks.
+  const resumed = world.savedState;
+  const spawn = resumed
+    ? { x: resumed.x, y: resumed.y, z: resumed.z }
+    : world.findSpawn();
   player.setPosition(spawn.x, spawn.y, spawn.z);
+  if (resumed) {
+    player.yaw = resumed.yaw;
+    player.pitch = resumed.pitch;
+    player.hotbarIndex = resumed.hotbar;
+    renderer.sky.timeOfDay = resumed.time;
+  }
 
   const audio = new AudioEngine();
 
@@ -188,7 +199,9 @@ async function boot(): Promise<void> {
   }
 
   // Drop the player onto the ground now that the terrain around spawn exists.
-  for (let y = Math.min(spawn.y + 40, 190); y > 1; y--) {
+  // A resumed player is already standing somewhere valid — possibly on a block
+  // they built in mid-air, so dropping them would be wrong.
+  for (let y = resumed ? -1 : Math.min(spawn.y + 40, 190); y > 1; y--) {
     if (world.isSolidAt(Math.floor(spawn.x), y - 1, Math.floor(spawn.z))) {
       player.setPosition(spawn.x, y + 0.05, spawn.z);
       break;
@@ -481,6 +494,11 @@ async function boot(): Promise<void> {
     world.update(player.position[0], player.position[2], world.usingWorkers ? 1 : 5);
     world.refreshAtlases();
     world.updateIndirectLight(player.position[0], player.position[2], dt);
+    world.recordPlayerState({
+      x: player.position[0], y: player.position[1], z: player.position[2],
+      yaw: player.yaw, pitch: player.pitch,
+      time: renderer.sky.timeOfDay, hotbar: player.hotbarIndex,
+    });
     world.updateSave(dt);
     accumulate('world', performance.now() - mark);
 
