@@ -72,21 +72,25 @@ export class Sky {
   readonly multiScatter: RenderTarget;
   readonly skyView: RenderTarget;
 
-  private readonly transmittanceProgram: Program;
-  private readonly multiScatterProgram: Program;
-  private readonly skyViewProgram: Program;
+  // Not readonly: the renderer throws the whole program cache away and rebuilds
+  // it whenever a shader define changes, and these have to be rebuilt with it.
+  private transmittanceProgram!: Program;
+  private multiScatterProgram!: Program;
+  private skyViewProgram!: Program;
 
   private bakedStatic = false;
   cameraRadiusKm = GROUND_RADIUS;
   /** (zenith-to-horizon, horizon-to-nadir) angles, a frame constant. */
   readonly horizonAngles = new Float32Array(2);
 
+  /**
+   * Allocates the three LUT targets. The programs are *not* built here — the
+   * renderer builds them, and rebuilds them, through `createPrograms`.
+   */
   constructor(
     private readonly gl: WebGL2RenderingContext,
     private readonly state: GLState,
     private readonly triangle: FullscreenTriangle,
-    programs: ProgramCache,
-    skyViewSteps: number,
   ) {
     const f = formats(gl);
 
@@ -102,6 +106,25 @@ export class Sky {
       color: [f.hdr], label: 'skyview',
     }, SKYVIEW_WIDTH, SKYVIEW_HEIGHT);
 
+  }
+
+  /**
+   * Builds the three atmosphere programs against a program cache.
+   *
+   * Separate from the constructor because the renderer disposes its whole cache
+   * and builds a new one whenever a shader define changes — and when it did,
+   * these three were left pointing at deleted programs. The transmittance and
+   * multiple-scattering textures survived, because textures are not owned by
+   * the cache, but the per-frame sky-view pass then ran with a dead program and
+   * filled its LUT with whatever the driver felt like. Everything downstream
+   * reads that LUT — the dome, the fog, the ambient on every block face — so
+   * the entire frame came out one flat colour. Changing quality preset in the
+   * settings panel was enough to trigger it.
+   *
+   * The march step count is picked up here too, which is what makes
+   * `skyViewSteps` an actual setting rather than a value read once at startup.
+   */
+  createPrograms(programs: ProgramCache, skyViewSteps: number): void {
     this.transmittanceProgram = programs.create(
       'sky.transmittance', 'fullscreen.vert.glsl', 'sky/transmittance.frag.glsl',
     );
@@ -112,6 +135,8 @@ export class Sky {
       'sky.skyview', 'fullscreen.vert.glsl', 'sky/skyview.frag.glsl',
       { MARCH_STEPS: Math.max(8, Math.round(skyViewSteps)) },
     );
+    // The static tables have to be laid down again by the new programs.
+    this.bakedStatic = false;
   }
 
   /** Advances time and weather. */

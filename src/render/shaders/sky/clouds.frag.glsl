@@ -56,18 +56,36 @@ vec2 windOffset(float scale) {
 }
 
 /**
- * Large-scale coverage. One fetch of a low-frequency slice of the shape
- * texture, used as a 2D weather map.
+ * Large-scale coverage: the weather map.
  *
- * The mapping centres on the requested coverage rather than scaling a [0,1]
- * noise by it: coverage becomes the lower bound of the shape remap below, so a
- * mean of 0.2 would demand a base shape above 0.8 and the sky would come out
- * empty.
+ * This is what decides where there are clouds and, far more importantly, where
+ * there are none — and it was the reason the sky had no clouds in it at all.
+ *
+ * The previous version took one fetch of a low-frequency slice and returned
+ * `coverage * (0.5 + noise * 1.15)`. Two problems, and together they were fatal.
+ * A single fetch of a Perlin-Worley field is one smooth blob field with a mean
+ * near 0.5 and almost no dynamic range at this scale, so the map came out
+ * nearly constant. And scaling it that way puts a *floor* under it: at the
+ * default setting the result never fell below about 0.3 anywhere, so the
+ * density remap below never reached zero, so every ray through the layer
+ * accumulated enough optical depth to close completely. The whole sky was one
+ * opaque, structureless sheet — measured, not guessed: the composite's
+ * transmittance channel was black from horizon to zenith.
+ *
+ * What is needed is contrast and gaps. Two octaves at different scales give the
+ * field shape, and the smoothstep clips its lower half to exactly zero, which
+ * is what a clear patch of sky is.
  */
 float cloudCoverage(vec2 worldXZ) {
   vec2 uv = worldXZ / COVERAGE_PERIOD + windOffset(1.0 / COVERAGE_PERIOD) * 0.4;
-  float noise = texture(uCloudShape, vec3(uv, 0.37)).r;
-  return saturate((uCloudCoverage + SCENE_RAIN * 0.3) * (0.5 + noise * 1.15));
+  float low = texture(uCloudShape, vec3(uv, 0.37)).r;
+  float high = texture(uCloudShape, vec3(uv * 3.1 + 0.43, 0.71)).r;
+  float weather = saturate(low * 0.62 + high * 0.38);
+
+  // Hard zero below the knee: gaps have to be real gaps, not thin cloud.
+  weather = smoothstep(0.44, 0.80, weather);
+
+  return saturate((uCloudCoverage + SCENE_RAIN * 0.45) * weather * 1.9);
 }
 
 /** Rounded base, wispy top. */

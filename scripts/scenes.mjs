@@ -92,6 +92,11 @@ for (const { key, value } of overrides) {
   // lighting without rebuilding anything.
   if (key === 'debug') {
     await page.evaluate((v) => window.supergraph.setDebugView(v), value);
+  } else if (key === 'preset') {
+    // Which profile the shot represents matters: `medium` renders at 0.72 of
+    // the window and reaches seven chunks, `high` at native and eight, and a
+    // complaint about how the distance looks is a complaint about one of them.
+    await page.evaluate((v) => window.supergraph.setPreset(v), value);
   } else {
     await page.evaluate((k, v) => window.supergraph.setSetting(k, v), key, value);
   }
@@ -194,6 +199,17 @@ await shoot('ground', `(() => {
   return true;
 })()`);
 
+// --- the sky itself ---
+// Across the sun and well up: the cloud march fades out near the horizon by
+// design, so a shot aimed at the horizon says nothing about whether there are
+// clouds at all.
+await shoot('sky', `(() => {
+  const api = window.supergraph;
+  api.teleport(${home3.x} + 0.5, ${home3.y} + 1.7, ${home3.z} + 0.5);
+  api.faceSun(1.5, 0.62);
+  return true;
+})()`);
+
 // --- 3. straight down at a block boundary ---
 await shoot('blocks', `(() => {
   const api = window.supergraph;
@@ -260,10 +276,13 @@ if (deep) {
 // --- 7. bird's eye ---
 await page.evaluate((h) => window.supergraph.teleport(h.x + 0.5, h.y + 95, h.z + 0.5), home3);
 await new Promise((r) => setTimeout(r, 16000));
+// Across the sun rather than away from it: a landscape lit from the side shows
+// its relief, and one lit from behind is a silhouette whatever the renderer
+// does. Depth of view is the question here, not the terminator.
 await shoot('air', `(() => {
   const api = window.supergraph;
   api.teleport(${home3.x} + 0.5, ${home3.y} + 95, ${home3.z} + 0.5);
-  api.faceSun(2.2, -0.34);
+  api.faceSun(1.25, -0.36);
   return true;
 })()`, 16000);
 

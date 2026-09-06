@@ -227,7 +227,7 @@ export class Renderer implements MeshSink {
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, ubo);
     gl.bindBuffer(gl.UNIFORM_BUFFER, null);
 
-    this.sky = new Sky(gl, this.state, this.triangle, this.programs, settings.skyViewSteps);
+    this.sky = new Sky(gl, this.state, this.triangle);
     this.profiler = new GpuProfiler(gl, caps.timerQuery);
 
     this.createPrograms();
@@ -303,6 +303,11 @@ export class Renderer implements MeshSink {
 
     this.programs.create('rain', 'weather/rain.vert.glsl', 'weather/rain.frag.glsl');
     this.programs.create('selection', 'debug/selection.vert.glsl', 'debug/selection.frag.glsl');
+
+    // The sky owns three programs of its own and they live in the same cache,
+    // so they have to be rebuilt here — not only in the Sky constructor, or a
+    // settings change leaves the atmosphere running on deleted programs.
+    this.sky.createPrograms(this.programs, s.skyViewSteps);
   }
 
   /** Finishes program linking; call until it returns true. */
@@ -567,6 +572,10 @@ export class Renderer implements MeshSink {
       this.createPrograms();
       this.programs.flush();
       this.bindUniformBlocks();
+      // The atmosphere's static tables were drawn by programs that no longer
+      // exist, and the sky-view pass needs them every frame.
+      this.sky.bakeStatic();
+      this.state.invalidate();
     }
 
     if (
@@ -1254,7 +1263,7 @@ export class Renderer implements MeshSink {
       program.float('uSeaLevel', SEA_LEVEL);
       program.float('uCloudBottom', 320);
       program.float('uCloudTop', 620);
-      program.float('uCloudCoverage', 0.6);
+      program.float('uCloudCoverage', s.cloudCoverage);
       program.float('uCloudDensity', 1.2);
       program.float('uCloudSpeed', 5.5);
 

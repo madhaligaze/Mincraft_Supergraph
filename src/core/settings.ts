@@ -96,6 +96,13 @@ export interface Settings {
   cloudMode: CloudMode;
   cloudSteps: number;
   cloudScale: number;
+  /**
+   * How much of the sky carries cloud, 0..1.
+   *
+   * A taste knob, not a cost one, and it earns a setting because the answer is
+   * a matter of what the player wants the sky to be. Zero is a clear day.
+   */
+  cloudCoverage: number;
 
   // Water
   waterReflections: boolean;
@@ -172,6 +179,7 @@ const BASE: Settings = {
   cloudMode: 'volumetric',
   cloudSteps: 32,
   cloudScale: 0.25,
+  cloudCoverage: 0.42,
 
   waterReflections: true,
   ssrSteps: 24,
