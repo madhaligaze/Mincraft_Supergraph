@@ -6,13 +6,13 @@
  * This one looks down at the ground at a grazing angle instead, which is where
  * relief reads strongest.
  *
- * Usage: node scripts/closeup.mjs <url> <settingKey> <valueA> <valueB> [prefix] [pitch]
+ * Usage: node scripts/closeup.mjs <url> <settingKey> <valueA> <valueB> [prefix] [pitch] [rain]
  */
 
 import { launch } from 'puppeteer-core';
 import { existsSync, writeFileSync } from 'node:fs';
 
-const [, , url, key, valueA, valueB, prefix = 'scripts/closeup', pitch = '-0.55'] = process.argv;
+const [, , url, key, valueA, valueB, prefix = 'scripts/closeup', pitch = '-0.55', rain = '0'] = process.argv;
 
 const CHROME = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -43,12 +43,13 @@ await page.evaluate(() => document.getElementById('overlay')?.setAttribute('hidd
 await new Promise((r) => setTimeout(r, 22000));
 
 // A low sun rakes across the relief; overhead light flattens it.
-await page.evaluate((p) => {
+await page.evaluate((p, r) => {
   const api = window.supergraph;
   api.findViewpoint(48);
   api.setTime(0.29);
   api.faceSun(1.9, p);
-}, Number(pitch));
+  if (r > 0) api.setWeather(r);
+}, Number(pitch), Number(rain));
 await new Promise((r) => setTimeout(r, 12000));
 
 for (const value of [valueA, valueB]) {

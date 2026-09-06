@@ -6,7 +6,10 @@
  * way to know where the milliseconds go — reasoning about it from the shader
  * source is how you end up optimising something that was never the problem.
  *
- * Usage: node scripts/breakdown.mjs [url] [preset] [secondsPerCase]
+ * Usage: node scripts/breakdown.mjs [url] [preset] [secondsPerCase] [caseSet] [rain]
+ *
+ * `rain` (0..1) applies to every measurement including the baselines, which is
+ * how effects that only exist in wet weather get a comparable base.
  */
 
 import { launch } from 'puppeteer-core';
@@ -15,6 +18,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 const URL = process.argv[2] ?? 'http://127.0.0.1:5173/';
 const PRESET = process.argv[3] ?? 'medium';
 const SECONDS = Number(process.argv[4] ?? 10);
+const RAIN = Number(process.argv[6] ?? 0);
 
 const CHROME = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -32,6 +36,12 @@ const CASE_SETS = {
     { name: 'no taa', changes: { taaEnabled: false } },
     { name: 'half res', changes: { resolutionScale: 0.6 } },
     { name: 'rd 4', changes: { renderDistance: 4 } },
+  ],
+  // Only meaningful with rain: pass 1 as the last argument, or every case and
+  // its baseline measure a dry world where neither of these runs at all.
+  wet: [
+    { name: 'no wet ssr', changes: { wetReflections: false } },
+    { name: 'no water ssr', changes: { ssrSteps: 0 } },
   ],
   // Parallax is the one effect whose cost is bounded by distance rather than
   // by geometry, so the range case matters as much as the step count.
@@ -102,10 +112,11 @@ async function measure() {
 
 /** Applies the preset, then the case's overrides, and lets things settle. */
 async function apply(changes) {
-  await page.evaluate((p) => {
+  await page.evaluate((p, rain) => {
     window.supergraph.setPreset(p);
     window.supergraph.setTime(0.36);
-  }, PRESET);
+    if (rain > 0) window.supergraph.setWeather(rain);
+  }, PRESET, RAIN);
 
   for (const [key, value] of Object.entries(changes)) {
     await page.evaluate((k, v) => window.supergraph.setSetting(k, v), key, value);

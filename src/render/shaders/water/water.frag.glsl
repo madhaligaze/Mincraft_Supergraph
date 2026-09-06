@@ -17,6 +17,7 @@
 #include "lib/noise.glsl"
 #include "lib/shadow.glsl"
 #include "lib/sky_sample.glsl"
+#include "lib/ssr.glsl"
 
 uniform sampler2D uSceneColor;
 uniform sampler2D uSceneDepth;
@@ -73,76 +74,11 @@ vec3 detailNormal(vec2 pos, float time) {
   return normalize(vec3(-(hx - h) * scale / e, 1.0, -(hz - h) * scale / e));
 }
 
-/**
- * Screen-space reflection.
- *
- * Marches in world space and reprojects each step, which keeps the step size
- * uniform in the scene rather than in screen space. Returns false when the ray
- * leaves the frustum or finds nothing, and the caller falls back to the sky.
- */
+/** Water's own wrapper around the shared march, with its budget. */
 bool traceReflection(vec3 origin, vec3 dir, out vec3 hitColor, out float confidence) {
-  hitColor = vec3(0.0);
-  confidence = 0.0;
-  if (uSsrSteps <= 0) return false;
-
-  // Longer steps far away, short steps near the surface where detail matters.
-  float stepSize = 0.55;
-  vec3 position = origin;
-  float previousDelta = 0.0;
-
-  for (int i = 0; i < 64; i++) {
-    if (i >= uSsrSteps) break;
-
-    position += dir * stepSize;
-    stepSize *= 1.14;
-
-    vec4 clip = uViewProj * vec4(position, 1.0);
-    if (clip.w <= 0.0) return false;
-    vec3 ndc = clip.xyz / clip.w;
-    vec2 uv = ndc.xy * 0.5 + 0.5;
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return false;
-
-    float sceneDepth = texture(uSceneDepth, uv).r;
-    if (sceneDepth <= 0.0) continue; // sky: keep marching
-
-    // Reversed-Z: a larger depth value is nearer.
-    float rayDepth = ndc.z * 0.5 + 0.5;
-    float delta = rayDepth - sceneDepth;
-
-    if (delta < 0.0 && previousDelta >= 0.0 && i > 0) {
-      // Crossed the surface: refine with a few bisection steps. Three is
-      // enough at this step size — each one is a dependent texture fetch.
-      vec3 lo = position - dir * stepSize;
-      vec3 hi = position;
-      for (int k = 0; k < 3; k++) {
-        vec3 mid = (lo + hi) * 0.5;
-        vec4 midClip = uViewProj * vec4(mid, 1.0);
-        vec3 midNdc = midClip.xyz / midClip.w;
-        vec2 midUv = midNdc.xy * 0.5 + 0.5;
-        float midScene = texture(uSceneDepth, midUv).r;
-        if ((midNdc.z * 0.5 + 0.5) - midScene < 0.0) hi = mid;
-        else lo = mid;
-      }
-
-      vec4 finalClip = uViewProj * vec4(hi, 1.0);
-      vec2 finalUv = (finalClip.xy / finalClip.w) * 0.5 + 0.5;
-
-      // Reject hits far behind the surface: those are geometry the ray passed
-      // through, not something it actually reflected off.
-      float finalScene = texture(uSceneDepth, finalUv).r;
-      float thickness = abs(linearDepth(finalScene) - linearDepth(finalClip.z / finalClip.w * 0.5 + 0.5));
-      if (thickness > 4.0) return false;
-
-      hitColor = texture(uSceneColor, finalUv).rgb;
-      // Fade out near the screen edges, where the reflection has no data.
-      vec2 edge = smoothstep(vec2(0.0), vec2(0.14), finalUv) *
-                  smoothstep(vec2(0.0), vec2(0.14), 1.0 - finalUv);
-      confidence = edge.x * edge.y;
-      return confidence > 0.01;
-    }
-    previousDelta = delta;
-  }
-  return false;
+  return traceScreenReflection(
+    uSceneColor, uSceneDepth, origin, dir, uSsrSteps, hitColor, confidence
+  );
 }
 
 void main() {

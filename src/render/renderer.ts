@@ -254,7 +254,9 @@ export class Renderer implements MeshSink {
     this.programs.create('chunk.cutout', 'chunk/chunk.vert.glsl', 'chunk/chunk.frag.glsl', {
       ...chunkDefines, ALPHA_TEST: true, FOLIAGE: true,
     });
-    this.programs.create('chunk.translucent', 'chunk/chunk.vert.glsl', 'chunk/chunk.frag.glsl', chunkDefines);
+    this.programs.create('chunk.translucent', 'chunk/chunk.vert.glsl', 'chunk/chunk.frag.glsl', {
+      ...chunkDefines, TRANSLUCENT: true,
+    });
 
     this.programs.create('chunk.shadow', 'chunk/shadow.vert.glsl', 'chunk/shadow.frag.glsl');
     this.programs.create('chunk.shadow.cutout', 'chunk/shadow.vert.glsl', 'chunk/shadow.frag.glsl', {
@@ -280,6 +282,7 @@ export class Renderer implements MeshSink {
       SAMPLE_COUNT: s.ssaoSamples,
     });
     this.programs.create('bilateral', 'fullscreen.vert.glsl', 'post/bilateral.frag.glsl');
+    this.programs.create('wet', 'fullscreen.vert.glsl', 'post/wet.frag.glsl');
     this.programs.create('taa', 'fullscreen.vert.glsl', 'post/taa.frag.glsl');
     this.programs.create('bloom.down', 'fullscreen.vert.glsl', 'post/bloom_down.frag.glsl');
     this.programs.create('bloom.up', 'fullscreen.vert.glsl', 'post/bloom_up.frag.glsl');
@@ -303,7 +306,7 @@ export class Renderer implements MeshSink {
       'chunk.opaque', 'chunk.cutout', 'chunk.translucent',
       'chunk.shadow', 'chunk.shadow.cutout',
       'water', 'grass', 'sky', 'clouds', 'clouds.composite',
-      'ssao', 'bilateral', 'taa', 'composite', 'rain', 'selection', 'adaptation',
+      'ssao', 'bilateral', 'taa', 'composite', 'rain', 'selection', 'adaptation', 'wet',
     ];
     for (const name of names) this.programs.get(name).bindBlock('Scene', 0);
     this.sky.bindBlocks();
@@ -636,15 +639,27 @@ export class Renderer implements MeshSink {
       profiler.end();
     }
 
-    // The copy exists solely so the water shader can read what is behind it.
-    // It is a full-resolution colour and depth blit, so doing it on frames
-    // with no water in view is a millisecond thrown away — and underground or
-    // inland that is most frames.
-    if (this.geometry.list(Bucket.Water).length > 0) {
+    // The copy exists so a shader can read what is already on screen: the
+    // water, to see through itself, and the wet-ground pass, to reflect. It is
+    // a full-resolution colour and depth blit, so doing it on frames that need
+    // neither is a millisecond thrown away — and in dry weather inland that is
+    // most frames.
+    const hasWater = this.geometry.list(Bucket.Water).length > 0;
+    const wantsWet = this.settings.wetReflections && this.sky.weather.wetness > 0.03;
+
+    if (hasWater || wantsWet) {
       profiler.begin('scene copy');
       this.copyScene();
       profiler.end();
+    }
 
+    if (wantsWet) {
+      profiler.begin('wet');
+      this.renderWetReflections();
+      profiler.end();
+    }
+
+    if (hasWater) {
       profiler.begin('water');
       this.renderWater(frame);
       profiler.end();
@@ -1279,12 +1294,18 @@ export class Renderer implements MeshSink {
     this.state.setBlend(true, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     this.state.setCull(false);
 
-    // Belt and braces against the shoreline z-fight: nudge water away from the
-    // camera in depth so that wherever it does end up coplanar with a block
-    // face, the solid surface wins deterministically instead of the two
-    // trading pixels triangle by triangle.
+    // Nudge water away from the camera in depth, so that wherever it ends up
+    // coplanar with a block face the solid surface wins deterministically
+    // instead of the two trading pixels triangle by triangle.
+    //
+    // The sign is the whole point, and it was wrong here for a long time.
+    // Depth is reversed — nearer is a *larger* value — so a positive offset
+    // pushes water towards the camera, which is the opposite of what this line
+    // is for. Worse, the offset scales with the depth slope, and a water plane
+    // seen edge-on at distance has an enormous one, so the wrong sign was
+    // strongest exactly where the shoreline needed it most.
     gl.enable(gl.POLYGON_OFFSET_FILL);
-    gl.polygonOffset(1.0, 1.0);
+    gl.polygonOffset(-1.0, -1.0);
 
     this.state.useProgram(program.handle);
     this.bindChunkCommon(program);
@@ -1304,6 +1325,44 @@ export class Renderer implements MeshSink {
     this.state.setBlend(false);
     this.state.setDepthWrite(false);
     this.state.setCull(true, gl.BACK);
+  }
+
+  /**
+   * Reflections on wet ground.
+   *
+   * Runs between the copy and the water: the copy is what it reflects, and the
+   * water is drawn afterwards so a puddle never tries to reflect the sea it is
+   * standing next to. Blended rather than added — a wet surface turns into a
+   * mirror, it does not glow.
+   */
+  private renderWetReflections(): void {
+    const gl = this.gl;
+    const program = this.programs.get('wet');
+
+    this.state.bindFramebuffer(this.main.fbo);
+    this.state.viewport(0, 0, this.internalWidth, this.internalHeight);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+
+    // Depth is only read, through the copy; the pass covers the screen and
+    // decides per pixel whether there is anything wet there.
+    this.state.setDepthTest(false);
+    this.state.setDepthWrite(false);
+    this.state.setCull(false);
+    this.state.setBlend(true, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    this.state.useProgram(program.handle);
+    this.state.bindTexture(7, gl.TEXTURE_2D, this.copy.texture);
+    this.state.bindTexture(8, gl.TEXTURE_2D, this.copy.depthTexture);
+    program.int('uSceneColor', 7);
+    program.int('uSceneDepth', 8);
+    // Half the water's budget: the ray leaves a puddle at a shallow angle and
+    // finds its neighbour quickly, or finds nothing worth showing.
+    program.int('uSsrSteps', Math.max(6, Math.round(this.settings.ssrSteps * 0.6)));
+    program.float('uWetDistance', 44);
+
+    this.triangle.draw();
+
+    this.state.setBlend(false);
   }
 
   private renderTranslucent(_frame: FrameState): void {

@@ -308,6 +308,11 @@ void main() {
     else if (uDebugView == 11) fragColor = vec4(giSample.rgb * 5.0, 1.0);  // indirect
     else if (uDebugView == 12) fragColor = vec4(vec3(giTrust), 1.0);       // grid trust
 #endif
+    // 13 and 14 exist to tell a mesher problem from a shading one: the layer is
+    // a flat varying, so a triangle that differs in it came out of the mesher
+    // wrong, while a UV discontinuity along a quad diagonal is the shader's.
+    else if (uDebugView == 13) fragColor = vec4(fract(uv), 0.0, 1.0);       // uv
+    else if (uDebugView == 14) fragColor = vec4(fract(vec3(vTexLayer * 0.077, vTexLayer * 0.31, vTexLayer * 0.13)), 1.0);
     else fragColor = vec4(vec3(matData.r), 1.0);                           // height field
     return;
   }
@@ -453,5 +458,15 @@ void main() {
   // --- atmosphere ---
   color = applyAerialPerspective(color, vWorldPos, viewDir, viewDistance);
 
-  fragColor = vec4(color, 1.0);
+#ifdef TRANSLUCENT
+  // Glass and ice are blended against what is behind them; alpha here is
+  // coverage, not a channel to smuggle data through.
+  fragColor = vec4(color, albedoSample.a);
+#else
+  // Alpha carries the wetness into the frame buffer. The screen-space pass
+  // that reflects the world in wet ground runs long after this one and cannot
+  // work out on its own whether a surface stood under an overhang while it
+  // rained — but this shader already knows, because it just used the answer.
+  fragColor = vec4(color, wetness);
+#endif
 }

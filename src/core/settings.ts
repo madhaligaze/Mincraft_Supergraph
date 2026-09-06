@@ -6,6 +6,13 @@
  * 1280x720 on that part, and `ultra` is the "screenshot" tier.
  */
 
+/**
+ * The four tiers are two playable profiles with a floor and a ceiling around
+ * them, which is how a console game ships: `medium` is the "smooth" profile,
+ * tuned to hold 60 fps on the target laptop, and `high` is the "pretty" one at
+ * native resolution and 30. `low` is for something weaker than the target, and
+ * `ultra` is for screenshots.
+ */
 export type PresetName = 'low' | 'medium' | 'high' | 'ultra';
 
 export type CloudMode = 'off' | 'planar' | 'volumetric';
@@ -72,6 +79,8 @@ export interface Settings {
   /** Screen-space reflection ray steps; 0 falls back to sky-only reflection. */
   ssrSteps: number;
   waterRefraction: boolean;
+  /** Screen-space reflections on ground the rain has wet. Costs only in rain. */
+  wetReflections: boolean;
 
   // Vegetation
   grassEnabled: boolean;
@@ -136,6 +145,7 @@ const BASE: Settings = {
   waterReflections: true,
   ssrSteps: 24,
   waterRefraction: true,
+  wetReflections: true,
 
   grassEnabled: true,
   grassDistance: 48,
@@ -177,6 +187,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     waterReflections: false,
     ssrSteps: 0,
     waterRefraction: false,
+    wetReflections: false,
     grassDistance: 24,
     grassDensity: 0.7,
     taaEnabled: true,
@@ -186,15 +197,19 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     textureResolution: 64,
     anisotropy: 1,
   },
+  // "Smooth": everything that survived the second stage of work — LOD,
+  // parallax, indirect light, dense grass — at an internal resolution the part
+  // can actually fill sixty times a second. The resolution scale is the lever
+  // that does most of the work; the rest is trimming what measured expensive.
   medium: {
     renderDistance: 7,
     lodNearChunks: 4,
     lodFarChunks: 6,
-    resolutionScale: 0.85,
+    resolutionScale: 0.72,
     shadowCascades: 3,
     shadowMapSize: 1024,
-    shadowDistance: 128,
-    shadowFilter: 2,
+    shadowDistance: 112,
+    shadowFilter: 1,
     parallaxSteps: 8,
     parallaxDepth: 0.06,
     parallaxDistance: 14,
@@ -203,16 +218,19 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     ssaoSamples: 8,
     skyViewSteps: 16,
     cloudMode: 'volumetric',
-    cloudSteps: 20,
+    cloudSteps: 16,
     cloudScale: 0.25,
     ssrSteps: 12,
-    grassDistance: 36,
+    grassDistance: 30,
     grassDensity: 1.0,
     textureResolution: 128,
     anisotropy: 4,
   },
+  // "Pretty": native resolution, the full shadow filter, reflections on wet
+  // ground. Thirty frames a second on the target part, and the tier the
+  // screenshots come from.
   high: {
-    // BASE is already the "high" tier.
+    // BASE is already this tier.
   },
   ultra: {
     renderDistance: 12,

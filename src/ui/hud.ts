@@ -208,8 +208,10 @@ export class Hud {
     const presets = document.createElement('div');
     presets.className = 'presets';
     const presetNames: PresetName[] = ['low', 'medium', 'high', 'ultra'];
+    // Named for what they are for rather than where they sit on a ladder: the
+    // middle two are the two profiles the engine is actually tuned around.
     const presetLabels: Record<PresetName, string> = {
-      low: 'Низк', medium: 'Средн', high: 'Выс', ultra: 'Ультра',
+      low: 'Слабый', medium: 'Плавно', high: 'Красиво', ultra: 'Скриншот',
     };
 
     const presetButtons = presetNames.map((name) => {
@@ -257,6 +259,7 @@ export class Hud {
     this.addSlider('Шаги облаков', 'cloudSteps', 0, 64, 4, (v) => (v === 0 ? 'выкл' : String(v)));
     this.addToggle('Отражения воды', 'waterReflections');
     this.addSlider('Шаги SSR', 'ssrSteps', 0, 48, 4, (v) => (v === 0 ? 'выкл' : String(v)));
+    this.addToggle('Отражения на мокром', 'wetReflections');
 
     this.addSectionTitle('Растительность');
     this.addToggle('Трава', 'grassEnabled');
