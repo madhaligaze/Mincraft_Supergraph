@@ -257,6 +257,8 @@ export class Hud {
 
     this.addSectionTitle('Небо и вода');
     this.addSlider('Шаги неба', 'skyViewSteps', 8, 48, 4, (v) => String(v));
+    this.addToggle('Объёмные лучи', 'lightShafts');
+    this.addSlider('Сила лучей', 'lightShaftStrength', 0, 1.5, 0.1, (v) => v.toFixed(1));
     this.addSlider('Шаги облаков', 'cloudSteps', 0, 64, 4, (v) => (v === 0 ? 'выкл' : String(v)));
     this.addToggle('Отражения воды', 'waterReflections');
     this.addSlider('Шаги SSR', 'ssrSteps', 0, 48, 4, (v) => (v === 0 ? 'выкл' : String(v)));

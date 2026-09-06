@@ -141,6 +141,8 @@ export class Renderer implements MeshSink {
   private aoTargets: RenderTarget[] = [];
   private taaTargets: RenderTarget[] = [];
   private cloudTarget!: RenderTarget;
+  /** Quarter-resolution light shafts, composited back additively. */
+  private shaftTarget!: RenderTarget;
   private bloomTargets: RenderTarget[] = [];
   /** 64x64 -> 16x16 -> 4x4 -> 1x1 log-luminance reduction chain. */
   private luminanceTargets: RenderTarget[] = [];
@@ -283,6 +285,10 @@ export class Renderer implements MeshSink {
     });
     this.programs.create('bilateral', 'fullscreen.vert.glsl', 'post/bilateral.frag.glsl');
     this.programs.create('wet', 'fullscreen.vert.glsl', 'post/wet.frag.glsl');
+    this.programs.create('shafts', 'fullscreen.vert.glsl', 'post/shafts.frag.glsl', {
+      SHAFT_STEPS: Math.max(4, s.lightShaftSteps),
+    });
+    this.programs.create('shafts.add', 'fullscreen.vert.glsl', 'post/shafts_add.frag.glsl');
     this.programs.create('taa', 'fullscreen.vert.glsl', 'post/taa.frag.glsl');
     this.programs.create('bloom.down', 'fullscreen.vert.glsl', 'post/bloom_down.frag.glsl');
     this.programs.create('bloom.up', 'fullscreen.vert.glsl', 'post/bloom_up.frag.glsl');
@@ -307,6 +313,7 @@ export class Renderer implements MeshSink {
       'chunk.shadow', 'chunk.shadow.cutout',
       'water', 'grass', 'sky', 'clouds', 'clouds.composite',
       'ssao', 'bilateral', 'taa', 'composite', 'rain', 'selection', 'adaptation', 'wet',
+      'shafts', 'shafts.add',
     ];
     for (const name of names) this.programs.get(name).bindBlock('Scene', 0);
     this.sky.bindBlocks();
@@ -484,6 +491,7 @@ export class Renderer implements MeshSink {
         new RenderTarget(gl, { color: [f.ao], label: 'ao1' }, 1, 1),
       ];
       this.cloudTarget = new RenderTarget(gl, { color: [f.hdr], label: 'clouds' }, 1, 1);
+      this.shaftTarget = new RenderTarget(gl, { color: [f.hdr], label: 'shafts' }, 1, 1);
       for (let i = 0; i < 6; i++) {
         this.bloomTargets.push(
           new RenderTarget(gl, { color: [f.hdrCompact], label: `bloom${i}` }, 1, 1),
@@ -513,6 +521,9 @@ export class Renderer implements MeshSink {
 
     const cloudScale = clamp(this.settings.cloudScale, 0.125, 1);
     this.cloudTarget.resize(Math.round(iw * cloudScale), Math.round(ih * cloudScale));
+    // A quarter along each axis: the beams are low-frequency, and the
+    // magnification back up is the blur they want anyway.
+    this.shaftTarget.resize(Math.max(2, iw >> 2), Math.max(2, ih >> 2));
 
     let bw = iw;
     let bh = ih;
@@ -540,7 +551,8 @@ export class Renderer implements MeshSink {
       previous.parallaxEnabled !== settings.parallaxEnabled ||
       previous.parallaxSteps !== settings.parallaxSteps ||
       previous.parallaxShadows !== settings.parallaxShadows ||
-      previous.giEnabled !== settings.giEnabled;
+      previous.giEnabled !== settings.giEnabled ||
+      previous.lightShaftSteps !== settings.lightShaftSteps;
 
     if (needsPrograms) {
       // Programs are cheap to rebuild and this only happens from the settings
@@ -636,6 +648,12 @@ export class Renderer implements MeshSink {
     if (this.settings.cloudMode !== 'off') {
       profiler.begin('clouds');
       this.renderClouds();
+      profiler.end();
+    }
+
+    if (this.settings.lightShafts) {
+      profiler.begin('shafts');
+      this.renderLightShafts();
       profiler.end();
     }
 
@@ -1328,6 +1346,56 @@ export class Renderer implements MeshSink {
   }
 
   /**
+   * Volumetric light shafts.
+   *
+   * Two passes, and the split is forced rather than chosen: the march reads the
+   * scene depth, which is attached to the main framebuffer, and a shader may
+   * not read a texture bound to its own target. So the march renders into its
+   * own quarter-size target and a second pass adds it back.
+   */
+  private renderLightShafts(): void {
+    const gl = this.gl;
+
+    // --- march ---
+    const march = this.programs.get('shafts');
+    this.state.bindFramebuffer(this.shaftTarget.fbo);
+    this.state.viewport(0, 0, this.shaftTarget.width, this.shaftTarget.height);
+    this.state.setDepthTest(false);
+    this.state.setDepthWrite(false);
+    this.state.setCull(false);
+    this.state.setBlend(false);
+
+    this.state.useProgram(march.handle);
+    this.state.bindTexture(0, gl.TEXTURE_2D, this.main.depthTexture);
+    if (this.shadows) this.state.bindTexture(6, gl.TEXTURE_2D_ARRAY, this.shadows.texture);
+    march.int('uSceneDepth', 0);
+    march.int('uShadowMap', 6);
+    march.float('uRange', Math.min(this.settings.shadowDistance, 140));
+    march.float('uStrength', this.settings.lightShaftStrength);
+    march.float('uSeaLevel', SEA_LEVEL);
+    if (this.shadows) {
+      march.mat4Array('uShadowMatrices', this.shadows.matrixData);
+      march.vec4v('uCascadeSplits', this.shadows.splitData);
+      march.float('uShadowTexel', 1 / this.shadows.size);
+      march.int('uCascadeCount', this.shadows.count);
+      march.vec2('uShadowBias', 0.00006, 0.0004);
+    }
+    this.triangle.draw();
+
+    // --- add back ---
+    const add = this.programs.get('shafts.add');
+    this.state.bindFramebuffer(this.main.fbo);
+    this.state.viewport(0, 0, this.internalWidth, this.internalHeight);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    this.state.setBlend(true, gl.ONE, gl.ONE);
+    this.state.useProgram(add.handle);
+    this.state.bindTexture(0, gl.TEXTURE_2D, this.shaftTarget.texture);
+    add.int('uShafts', 0);
+    this.triangle.draw();
+    this.state.setBlend(false);
+  }
+
+  /**
    * Reflections on wet ground.
    *
    * Runs between the copy and the water: the copy is what it reflects, and the
@@ -1653,6 +1721,7 @@ export class Renderer implements MeshSink {
     for (const t of this.luminanceTargets) t.dispose();
     for (const t of this.adaptationTargets) t.dispose();
     this.cloudTarget?.dispose();
+    this.shaftTarget?.dispose();
     if (this.tintAtlas) this.gl.deleteTexture(this.tintAtlas);
     if (this.materials) {
       this.gl.deleteTexture(this.materials.albedo);

@@ -69,6 +69,12 @@ export interface Settings {
   skyViewSteps: number;
   aerialPerspective: boolean;
 
+  // Volumetric light shafts: sunlight made visible in the air between things.
+  lightShafts: boolean;
+  /** March steps. Dithered, so eight already read as smooth. */
+  lightShaftSteps: number;
+  lightShaftStrength: number;
+
   // Clouds
   cloudMode: CloudMode;
   cloudSteps: number;
@@ -138,6 +144,10 @@ const BASE: Settings = {
   skyViewSteps: 24,
   aerialPerspective: true,
 
+  lightShafts: true,
+  lightShaftSteps: 12,
+  lightShaftStrength: 0.4,
+
   cloudMode: 'volumetric',
   cloudSteps: 32,
   cloudScale: 0.25,
@@ -182,6 +192,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     ssaoEnabled: false,
     skyViewSteps: 12,
     aerialPerspective: false,
+    lightShafts: false,
     cloudMode: 'planar',
     cloudSteps: 0,
     waterReflections: false,
@@ -217,6 +228,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     ssaoScale: 0.5,
     ssaoSamples: 8,
     skyViewSteps: 16,
+    lightShaftSteps: 8,
     cloudMode: 'volumetric',
     cloudSteps: 16,
     cloudScale: 0.25,
@@ -248,6 +260,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     ssaoScale: 1.0,
     ssaoSamples: 16,
     skyViewSteps: 40,
+    lightShaftSteps: 24,
     cloudSteps: 64,
     cloudScale: 0.5,
     ssrSteps: 48,
