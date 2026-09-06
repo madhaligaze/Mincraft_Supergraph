@@ -71,10 +71,14 @@ vec3 distantSea(vec3 dir, float startDistance, out float coverage) {
 
   color = applyAerialPerspective(color, hit, dir, distance);
 
-  // Fade in over the last part of the render distance rather than appearing on
-  // a line: inside it there is real water, and while chunks are still streaming
-  // there are holes this must not fill with a confident ocean.
-  coverage = smoothstep(startDistance, startDistance * 1.35, distance);
+  // The fade band is wide, and that is not cosmetic. The set of points at a
+  // fixed distance on a plane below the camera is a circle on screen, so a
+  // narrow ramp draws a visible ring across the frame — which is exactly what a
+  // ramp tied to the render distance did from any height. Starting close and
+  // fading over a long way spreads that circle into a gradient nobody reads as
+  // an edge. The near cutoff only exists so a chunk that has not streamed in
+  // yet does not get an ocean painted under the player's feet.
+  coverage = smoothstep(startDistance, startDistance * 4.0, distance);
   return color;
 }
 
@@ -88,7 +92,7 @@ void main() {
   color += celestialBodies(dir);
 
   float coverage;
-  vec3 sea = distantSea(dir, uFog.w * 0.8, coverage);
+  vec3 sea = distantSea(dir, 40.0, coverage);
   color = mix(color, sea, coverage);
 
   fragColor = vec4(color, 1.0);

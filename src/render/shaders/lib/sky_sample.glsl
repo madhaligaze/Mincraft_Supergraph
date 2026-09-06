@@ -64,9 +64,14 @@ vec3 atmosphereColor(vec3 dir) {
   if (dir.y < 0.0) {
     // Distant land seen through a lot of haze: dimmer and less saturated than
     // the sky it sits under, but the same hue.
-    float below = saturate(-dir.y * 5.0);
-    color *= mix(1.0, 0.58, below);
-    color = mix(color, vec3(luminance(color)), below * 0.3);
+    //
+    // Both numbers used to be much stronger, and reached full strength within
+    // twelve degrees of the horizon. Everything below that — which from any
+    // height is most of the frame — was therefore painted one dim grey, and a
+    // dim grey with no hue in it is what a view from altitude looked like.
+    float below = saturate(-dir.y * 2.2);
+    color *= mix(1.0, 0.72, below);
+    color = mix(color, vec3(luminance(color)), below * 0.12);
   }
   return color;
 }

@@ -271,7 +271,15 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
   // ground. Thirty frames a second on the target part, and the tier the
   // screenshots come from.
   high: {
-    // BASE is already this tier.
+    // BASE is this tier.
+    //
+    // Ten chunks was tried and rejected. Section 7.1 measured render distance
+    // as nearly free, but that measurement was taken inland: over water it is
+    // not, because every extra chunk of ocean is a full screen of the frame's
+    // most expensive pass, and the water pass went from 40% of the frame to
+    // 46%. What the distance was wanted for — the world not visibly ending —
+    // the sea plane in sky.frag.glsl now provides for the cost of one ray-plane
+    // intersection, out to the real horizon rather than out to ten chunks.
   },
   ultra: {
     renderDistance: 12,

@@ -828,13 +828,27 @@ export class Renderer implements MeshSink {
     d[107] = this.prevJitterY;
 
     // Tuned so a horizontal view at sea level reaches about half opacity at the
-    // far edge of the render distance. The height falloff is deliberately
-    // gentle: a steep one makes the fog integral explode when looking down from
-    // a summit, which whites out the entire valley.
+    // far edge of the render distance.
+    //
+    // The height falloff used to be 0.006 per block — a scale height of 167
+    // blocks in a world 190 blocks tall, which is to say the haze filled it
+    // evenly from bedrock to sky. From any altitude that turned the whole lower
+    // half of the frame into one flat grey wash with no distance in it at all.
+    // At 0.014 the haze lives in the bottom seventy blocks, so valleys hold it,
+    // ridges rise out of it, and a view from height keeps its depth. The
+    // ground-level look is unchanged: the density is raised to compensate for
+    // the shorter scale height, and a horizontal view still reaches about half
+    // opacity at the far edge.
+    //
+    // The steeper falloff is also what the old comment here warned against, and
+    // the warning was aimed at the wrong term: what whited out the valley in
+    // section 5.7 was density, not falloff. A steep falloff makes the integral
+    // *smaller* looking down from a summit, because the camera starts above
+    // most of the haze.
     const viewBlocks = this.settings.renderDistance * CHUNK_SIZE;
-    const base = 0.75 / Math.max(viewBlocks, 32);
+    const base = 0.88 / Math.max(viewBlocks, 32);
     d[108] = base * frame.biomeFog * (1 + sky.weather.rain * 2.6);
-    d[109] = 0.006;
+    d[109] = 0.014;
     d[110] = 6.0;
     d[111] = viewBlocks;
 

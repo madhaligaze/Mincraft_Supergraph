@@ -59,10 +59,17 @@ export const POSITION_BIAS = POSITION_SCALE;
  * Largest greedy rectangle allowed on a liquid's top face, in cells.
  *
  * Everything else merges without limit. This one cannot: the surface is
- * displaced per vertex, and a quad that spans more than a few blocks folds
- * along its own diagonal. See the note in `mergeMask`.
+ * displaced per vertex, and a quad that spans a whole section folds along its
+ * own diagonal. See the note in `mergeMask`.
+ *
+ * Eight, not four. Four was measured at 5.5 ms of extra water pass on the
+ * target part — an ocean's surface is the largest uniform region in the world,
+ * so capping its merge multiplies the one thing greedy meshing was best at.
+ * Eight quarters that cost and is still far below the twenty-block wave that
+ * carries the displacement; the shorter waves in the sum have amplitudes in the
+ * hundredths of a block and cannot fold anything visibly.
  */
-const LIQUID_SURFACE_MERGE = 4;
+const LIQUID_SURFACE_MERGE = 8;
 
 export const enum TintMode {
   None = 0,
