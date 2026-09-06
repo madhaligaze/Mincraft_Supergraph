@@ -172,11 +172,25 @@ vec3 applyAerialPerspective(vec3 color, vec3 worldPos, vec3 viewDir, float dist)
 
   vec3 fogColor = atmosphereColor(viewDir);
 
-  // Forward-scattered sunlight: looking toward the sun through haze should
-  // glow, and this is what produces the god-ray feel without a raymarch.
+  // Forward-scattered sunlight through the local haze.
+  //
+  // This term used to be the brightest thing in the frame. It ran a Mie phase
+  // at g = 0.76 — which peaks near 2.4 — against the sun's full intensity, so
+  // anything seen through haze within twenty degrees of the sun was painted
+  // over with something an order of magnitude brighter than the sky, and a
+  // wooded hillside on the sunward side of the camera came out as flat white.
+  //
+  // It was also counting the same photons twice. `fogColor` is the sky-view
+  // LUT, and the LUT already integrates single and multiple scattering with
+  // its own Mie phase; the sky near the sun is bright in it for exactly this
+  // reason. What is genuinely missing is only the near-ground haze the LUT's
+  // atmosphere profile does not model, so what is added here is a small local
+  // term: a broader lobe, and scaled to sit alongside the sky's brightness
+  // rather than the sun's.
   float cosSun = dot(viewDir, uSunDirection.xyz);
-  float mie = miePhase(cosSun, 0.76);
-  vec3 sunGlow = uSunColor.rgb * uSunDirection.w * mie * 0.55 * saturate(uSunDirection.y * 3.0 + 0.2);
+  float mie = miePhase(cosSun, 0.60);
+  vec3 sunGlow = uSunColor.rgb * uSunDirection.w * mie * 0.05 *
+    saturate(uSunDirection.y * 3.0 + 0.2);
 
   fogColor += sunGlow;
 

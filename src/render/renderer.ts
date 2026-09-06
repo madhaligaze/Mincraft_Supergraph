@@ -1048,6 +1048,7 @@ export class Renderer implements MeshSink {
     program.int('uShadowMap', 6);
 
     program.float('uTextureSize', this.materials.size);
+    program.float('uSurfaceDetail', this.settings.surfaceDetail);
     // Relief depth in blocks, and the reciprocal of the distance it fades over.
     program.vec2(
       'uParallaxParams',
@@ -1062,6 +1063,7 @@ export class Renderer implements MeshSink {
     if (this.shadows) {
       program.mat4Array('uShadowMatrices', this.shadows.matrixData);
       program.vec4v('uCascadeSplits', this.shadows.splitData);
+      program.vec4v('uCascadeTexel', this.shadows.texelData);
       program.float('uShadowTexel', 1 / this.shadows.size);
       program.int('uCascadeCount', this.shadows.count);
       // Reversed depth over a large ortho range needs only a small constant
@@ -1159,6 +1161,7 @@ export class Renderer implements MeshSink {
     if (this.shadows) {
       program.mat4Array('uShadowMatrices', this.shadows.matrixData);
       program.vec4v('uCascadeSplits', this.shadows.splitData);
+      program.vec4v('uCascadeTexel', this.shadows.texelData);
       program.float('uShadowTexel', 1 / this.shadows.size);
       program.int('uCascadeCount', this.shadows.count);
       program.vec2('uShadowBias', 0.00012, 0.0008);
@@ -1376,6 +1379,7 @@ export class Renderer implements MeshSink {
     if (this.shadows) {
       march.mat4Array('uShadowMatrices', this.shadows.matrixData);
       march.vec4v('uCascadeSplits', this.shadows.splitData);
+      march.vec4v('uCascadeTexel', this.shadows.texelData);
       march.float('uShadowTexel', 1 / this.shadows.size);
       march.int('uCascadeCount', this.shadows.count);
       march.vec2('uShadowBias', 0.00006, 0.0004);

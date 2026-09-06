@@ -741,7 +741,7 @@ export function bakeMaterial(
   // its normals — that is what `NORMAL_STRENGTH` exists to compensate for. The
   // parallax march needs the shape, not that amplitude, so it gets the same
   // normalisation a pack's height field does.
-  normalizeHeight(material);
+  normalizeHeight(material, size);
 
   return { albedo, surface, material };
 }
@@ -818,7 +818,13 @@ export async function createMaterials(
   onProgress?: (done: number, total: number, name: string) => void,
 ): Promise<MaterialTextures> {
   const layers = TEXTURES.length;
-  const meta = await loadPackMeta();
+  // `?nopack` runs the procedural set even with a pack extracted. The pack
+  // decides what most of the world looks like, so "is this the engine or is
+  // this the pack?" is a question that comes up constantly, and answering it by
+  // renaming a directory is not something a screenshot script can do.
+  const noPack = typeof location !== 'undefined' &&
+    new URLSearchParams(location.search).has('nopack');
+  const meta = noPack ? null : await loadPackMeta();
 
   // Probe one material to learn the pack's tile size before allocating.
   let size = requestedSize;

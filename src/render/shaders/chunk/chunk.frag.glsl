@@ -21,6 +21,14 @@ uniform sampler2DArray uMaterialArray;
 uniform sampler2D uAmbientOcclusion;
 /** Material tile resolution, for the manual mip estimate below. */
 uniform float uTextureSize;
+/**
+ * How much of the material's normal map to apply, 0..1.
+ *
+ * A pack that draws its normals from a rounded-pixel stencil gives every block
+ * in the world the same moulded-plastic shading at full strength. See
+ * `surfaceDetail` in settings.ts.
+ */
+uniform float uSurfaceDetail;
 
 #ifdef USE_GI
 /**
@@ -245,7 +253,11 @@ void main() {
   float subsurface = matData.b > 0.255 ? (matData.b - 0.255) * 1.342 : 0.0;
 
   // --- normal ---
-  vec2 nxy = surface.rg * 2.0 - 1.0;
+  // The slope is scaled, not the finished vector: halving x and y and
+  // rebuilding z is the same as halving the surface gradient, which is what
+  // "half as bumpy" actually means. Scaling the normal itself and renormalising
+  // would leave the steepest texels almost untouched.
+  vec2 nxy = (surface.rg * 2.0 - 1.0) * uSurfaceDetail;
   vec3 tangentNormal = vec3(nxy, sqrt(saturate(1.0 - dot(nxy, nxy))));
   vec3 N = normalize(tbn * tangentNormal);
 

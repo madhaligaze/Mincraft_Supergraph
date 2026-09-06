@@ -40,12 +40,29 @@ export interface Settings {
   /** 1 = 3x3 PCF, 2 = 5x5 rotated Poisson, 3 = 5x5 + normal-offset slope bias. */
   shadowFilter: number;
 
+  /**
+   * Strength of the material's tangent-space normal map, 0..1.
+   *
+   * Not a performance knob — a taste one, and the reason it exists is specific.
+   * Packs in the "rounded blocks" family draw their normals from a near-binary
+   * stencil, one blob per texture pixel, so at full strength every surface in
+   * the world reads as moulded plastic. Scaling the normal back keeps the
+   * material's texture while dropping the moulding.
+   */
+  surfaceDetail: number;
+
   // Parallax occlusion mapping: relief inside the block face, marched against
   // the height field the material array already carries.
   parallaxEnabled: boolean;
   /** March steps at full strength; scales down with distance and view angle. */
   parallaxSteps: number;
-  /** Depth of the relief, in blocks. Past ~0.1 the flat silhouette shows. */
+  /**
+   * Depth of the relief, in blocks.
+   *
+   * Small on purpose. What this marches against is quantised in most packs, and
+   * depth is the multiplier on every terrace in it; the block silhouette stays
+   * flat besides, so deep relief only advertises where it stops.
+   */
   parallaxDepth: number;
   /** Blocks beyond which the face is flat again. */
   parallaxDistance: number;
@@ -128,9 +145,10 @@ const BASE: Settings = {
   shadowDistance: 160,
   shadowFilter: 2,
 
+  surfaceDetail: 0.55,
   parallaxEnabled: true,
   parallaxSteps: 12,
-  parallaxDepth: 0.07,
+  parallaxDepth: 0.03,
   parallaxDistance: 18,
   parallaxShadows: false,
 
@@ -146,7 +164,10 @@ const BASE: Settings = {
 
   lightShafts: true,
   lightShaftSteps: 12,
-  lightShaftStrength: 0.4,
+  // Beams should be visible against the haze, not instead of it. At 0.4 the
+  // additive pass and the aerial perspective's sun glow were stacking into the
+  // same white cone in front of the sun.
+  lightShaftStrength: 0.26,
 
   cloudMode: 'volumetric',
   cloudSteps: 32,
@@ -222,7 +243,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     shadowDistance: 112,
     shadowFilter: 1,
     parallaxSteps: 8,
-    parallaxDepth: 0.06,
+    parallaxDepth: 0.026,
     parallaxDistance: 14,
     giStrength: 0.9,
     ssaoScale: 0.5,
@@ -254,7 +275,7 @@ const OVERRIDES: Record<PresetName, Partial<Settings>> = {
     shadowDistance: 256,
     shadowFilter: 3,
     parallaxSteps: 32,
-    parallaxDepth: 0.09,
+    parallaxDepth: 0.042,
     parallaxDistance: 28,
     parallaxShadows: true,
     ssaoScale: 1.0,

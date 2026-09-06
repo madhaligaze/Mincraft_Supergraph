@@ -13,6 +13,8 @@ uniform sampler2DArrayShadow uShadowMap;
 uniform mat4 uShadowMatrices[4];
 /** Far view distance of each cascade. */
 uniform vec4 uCascadeSplits;
+/** World size of one shadow texel in each cascade; see shadows.ts. */
+uniform vec4 uCascadeTexel;
 /** 1 / shadowMapSize. */
 uniform float uShadowTexel;
 uniform int uCascadeCount;
@@ -42,18 +44,33 @@ int selectCascade(float viewDistance) {
 /**
  * Samples one cascade.
  *
- * `normalOffset` pushes the sample point along the surface normal before
- * projection. This is the cheapest fix for shadow acne on a voxel world: the
- * geometry is all axis-aligned planes, so a normal offset of about one texel of
- * world size removes self-shadowing without the peter-panning a large constant
- * depth bias would cause.
+ * The sample point is pushed along the surface normal before projection. This
+ * is the cheapest fix for shadow acne on a voxel world: the geometry is all
+ * axis-aligned planes, so an offset of about one texel of world size removes
+ * self-shadowing without the peter-panning a large constant depth bias causes.
+ *
+ * How far to push is the whole question, and it was answered wrong twice over.
+ * The texel size was derived from the split distance rather than from the
+ * cascade's fitted radius, which underestimated it by the field of view's
+ * half-diagonal tangent; and the offset ignored the PCF footprint entirely, so
+ * a filter reaching two texels out took most of its taps against the very
+ * surface the offset was supposed to clear. Flat ground in full sun therefore
+ * came out ribbed — the parallel ridges that made every block look sliced.
+ *
+ * The clamp at the end is for the last cascade, whose texels are half a block
+ * across at the default distance: past a point the offset stops fixing acne and
+ * starts detaching shadows from what casts them, and a soft far shadow is a
+ * better trade than a floating one.
  */
 float sampleCascade(
   int cascade, vec3 worldPos, vec3 normal, float NoL, float rotation, int quality
 ) {
-  float texelWorld = uShadowTexel * 2.0 * uCascadeSplits[cascade];
+  float texelWorld = uCascadeTexel[cascade];
   float slope = clamp(1.0 - NoL, 0.0, 1.0);
-  vec3 offsetPos = worldPos + normal * texelWorld * (0.65 + slope * 1.8);
+  // Must clear the whole filter footprint, not one texel.
+  float filterTexels = quality >= 3 ? 3.4 : quality >= 2 ? 2.4 : 1.5;
+  float offset = min(texelWorld * filterTexels * (1.0 + slope * 1.6), 0.85);
+  vec3 offsetPos = worldPos + normal * offset;
 
   vec4 shadowClip = uShadowMatrices[cascade] * vec4(offsetPos, 1.0);
   vec3 shadowCoord = shadowClip.xyz / shadowClip.w;

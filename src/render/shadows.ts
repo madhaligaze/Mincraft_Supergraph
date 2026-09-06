@@ -44,6 +44,17 @@ export class ShadowMaps {
   /** Flat array of cascade matrices, ready to upload. */
   readonly matrixData: Float32Array;
   readonly splitData = new Float32Array(4);
+  /**
+   * World size of one shadow texel per cascade, ready to upload.
+   *
+   * The shader used to derive this from the split distance instead, and the
+   * derivation was wrong: a cascade is fitted to the bounding *sphere* of its
+   * frustum slice, whose radius is the split times the half-diagonal tangent of
+   * the field of view — about 1.6 at 75 degrees and 16:9. Every normal offset
+   * in the shadow lookup was therefore 1.6 times too small, which is why lit
+   * ground came out ribbed with acne.
+   */
+  readonly texelData = new Float32Array(4);
 
   private readonly fbo: WebGLFramebuffer;
   private readonly scratch = {
@@ -154,12 +165,16 @@ export class ShadowMaps {
 
       cascade.split = split;
       this.splitData[i] = split;
+      this.texelData[i] = cascade.texelWorldSize;
 
       previousSplit = split;
     }
 
     // Pad the remaining split slots so the shader's loop terminates cleanly.
-    for (let i = this.count; i < 4; i++) this.splitData[i] = maxDistance;
+    for (let i = this.count; i < 4; i++) {
+      this.splitData[i] = maxDistance;
+      this.texelData[i] = this.texelData[Math.max(0, this.count - 1)];
+    }
 
     this.everFitted = true;
   }
