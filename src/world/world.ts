@@ -345,26 +345,45 @@ export class World {
     // there fills the view faster, and there is no steady frame rate to
     // protect yet. Once caught up, the budget tightens so an arriving chunk
     // cannot cost a visible hitch.
-    const budget = this.uploadQueue.length > 48 ? 7 : 2.5;
-    const deadline = performance.now() + budget;
+    const streaming = this.uploadQueue.length > 48;
+    const deadline = performance.now() + (streaming ? 7 : 2.5);
+
+    // The time check alone always overshoots by one upload, because it can only
+    // notice after the upload has been paid for — and on the "pretty" profile a
+    // single section can be a megabyte, which is a visible stall on its own.
+    // So the size is checked *before* committing to it: a section is uploaded
+    // only if it still fits, or if nothing has gone through yet.
+    let budget = streaming ? 3 << 20 : 768 << 10;
     let uploaded = 0;
 
     while (this.uploadQueue.length > 0) {
-      const result = this.uploadQueue.shift();
-      if (!result) break;
+      const result = this.uploadQueue[0];
 
       // A column unloaded while its mesh was in flight has nothing to attach to.
       const state = this.states.get(chunkKey(result.chunkX, result.chunkZ));
-      if (!state) continue;
+      if (!state) {
+        this.uploadQueue.shift();
+        continue;
+      }
 
-      this.sink.uploadSection(result);
-      uploaded++;
+      let bytes = 0;
+      for (const bucket of result.buckets) {
+        if (bucket) bytes += bucket.vertices.byteLength;
+      }
 
       // Always let at least one through, so a heavy section cannot stall the
       // queue forever behind its own cost.
-      if (uploaded > 0 && performance.now() >= deadline) break;
+      if (uploaded > 0 && bytes > budget) break;
+
+      this.uploadQueue.shift();
+      this.sink.uploadSection(result);
+      uploaded++;
+      budget -= bytes;
+
+      if (budget <= 0 || performance.now() >= deadline) break;
     }
   }
+
 
   /** Creates column buffers for everything inside the load radius. */
   private ensureLoaded(): void {
@@ -959,13 +978,25 @@ export class World {
   }
 
   /** Re-uploads atlas tiles invalidated by edits. Call once per frame. */
+  /**
+   * Hands new columns' tint tiles to the renderer, a few per frame.
+   *
+   * This used to upload every ready column in one go, which on a wide render
+   * distance means dozens of columns landing together, four `texSubImage3D`
+   * calls each. That is the same mistake the mesh queue already learned from
+   * (6.7): a burst of synchronous uploads is a visible hitch, and the fix is
+   * the same — a budget, so the world fills in over a few frames instead of
+   * stopping one.
+   */
   refreshAtlases(): void {
+    let budget = 4;
     for (const [key, state] of this.states) {
       if (state.atlasUploaded || state.stage < Stage.Lit) continue;
       const column = this.store.getByKey(key);
       if (!column) continue;
       this.uploadAtlas(column);
       state.atlasUploaded = true;
+      if (--budget <= 0) break;
     }
   }
 
