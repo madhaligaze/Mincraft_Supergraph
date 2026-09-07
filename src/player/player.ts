@@ -9,6 +9,7 @@
 import { Input } from '../core/input.ts';
 import { World } from '../world/world.ts';
 import { Block, BLOCK_FLAGS, BlockFlag, HOTBAR, isFluid } from '../world/blocks.ts';
+import { isWater } from '../world/fluids.ts';
 import { WORLD_HEIGHT } from '../world/constants.ts';
 import {
   Vec3, vec3, v3set, clamp, damp, lerp, DEG2RAD, saturate,
@@ -165,7 +166,7 @@ export class Player {
     const x = Math.floor(this.position[0]);
     const z = Math.floor(this.position[2]);
     const eyeY = Math.floor(this.position[1] + this.eyeHeight);
-    this.headUnderwater = this.world.getBlock(x, eyeY, z) === Block.Water;
+    this.headUnderwater = isWater(this.world.getBlock(x, eyeY, z));
 
     if (this.headUnderwater) {
       // Walk up to the surface to find out how deep this is. The scan is
@@ -174,7 +175,7 @@ export class Player {
       let above = 0;
       while (
         above < SUBMERSION_DEPTH &&
-        this.world.getBlock(x, eyeY + above + 1, z) === Block.Water
+        isWater(this.world.getBlock(x, eyeY + above + 1, z))
       ) {
         above++;
       }

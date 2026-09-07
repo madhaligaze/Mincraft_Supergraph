@@ -17,6 +17,7 @@
 import {
   BLOCK_FACE_TEX, BLOCK_FLAGS, BLOCK_RENDER, BLOCK_LIGHT, Block, BlockFlag,
   RenderKind, shouldRenderFace, FACE_PY, FACE_NY,
+  FLUID_LEVEL, FLUID_SURFACE_DROP, NOT_FLUID,
 } from './blocks.ts';
 import {
   CHUNK_SIZE, SECTION_HEIGHT, WORLD_HEIGHT, columnIndex, CHUNK_MASK,
@@ -521,7 +522,7 @@ export class Mesher {
           const neighbour = this.blocks[this.ri(x + nx, y + ny, z + nz)];
           if (!shouldRenderFace(self, neighbour)) continue;
 
-          // A liquid face against more of the same liquid is never visible.
+          // A liquid face hidden behind more liquid is never visible.
           //
           // This previously excluded the top face, so every block of a twenty
           // deep ocean emitted its own surface quad: twenty translucent planes
@@ -529,9 +530,16 @@ export class Mesher {
           // shoreline blocks as a sawtooth of half-quad triangles. It was also
           // the reason the water pass could cost over a hundred milliseconds —
           // the overdraw was twenty layers deep.
+          //
+          // With flow levels the test is no longer "is the neighbour a liquid"
+          // but "is the neighbour's surface at least as high as mine". A source
+          // beside a thin flow has to draw the side face between them, or the
+          // step down is an open gap; the thin flow beside the source does not,
+          // because the source hides it.
           if (kind === RenderKind.Liquid) {
-            if (BLOCK_RENDER[neighbour] === RenderKind.Liquid) continue;
             if (face === FACE_NY) continue;
+            const neighbourLevel = FLUID_LEVEL[neighbour];
+            if (neighbourLevel !== NOT_FLUID && neighbourLevel <= FLUID_LEVEL[self]) continue;
           }
 
           const cell = vi * S + ui;
@@ -741,13 +749,15 @@ export class Mesher {
     const oy = ny > 0 ? 1 : 0;
     const oz = nz > 0 ? 1 : 0;
 
-    // Water sits a quarter of a block below the top so the surface reads as a
-    // liquid rather than a solid cube flush with the shore. A quarter rather
-    // than an eighth on purpose: the wave displacement adds up to 0.085, and
-    // anything closer let the surface land near-coplanar with the block tops
-    // along the shoreline, where it z-fought them into a sawtooth of
-    // half-quad triangles.
-    const drop = kind === RenderKind.Liquid && face === FACE_PY ? -2 : 0;
+    // A fluid's surface sits below the top of its cell — a quarter of a block
+    // for a source, further for each flow level, so a stream reads as thinning
+    // out as it runs. A quarter rather than an eighth for the source on
+    // purpose: the wave displacement adds up to 0.085, and anything closer let
+    // the surface land near-coplanar with the block tops along the shoreline,
+    // where it z-fought them into a sawtooth of half-quad triangles.
+    const drop = kind === RenderKind.Liquid && face === FACE_PY
+      ? -FLUID_SURFACE_DROP[block]
+      : 0;
 
     // Cell coordinates become block coordinates by scaling with the decimation.
     const step = this.step;

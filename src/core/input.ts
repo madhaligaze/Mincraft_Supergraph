@@ -22,6 +22,21 @@ export class Input {
   locked = false;
   sensitivity = 0.0022;
 
+  /**
+   * Input is being driven by a script rather than by a person.
+   *
+   * Headless Chrome cannot grant pointer lock, so a test that clicks "Play"
+   * immediately loses it again and the game pauses — which is why nothing that
+   * needs the simulation to actually run could be tested from the outside. In
+   * synthetic mode `locked` is forced true, real mouse and keyboard events are
+   * ignored, and the deltas come from `inject*` instead.
+   *
+   * This is the difference between a screenshot rig and being able to play the
+   * game from a script: walking, digging, building and swimming all need the
+   * clock to advance.
+   */
+  synthetic = false;
+
   private readonly canvas: HTMLCanvasElement;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -39,6 +54,7 @@ export class Input {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    if (this.synthetic) return;
     // F-keys and Tab would otherwise trigger browser chrome mid-game.
     if (this.locked && (e.code.startsWith('F') || e.code === 'Tab')) e.preventDefault();
     if (e.repeat) return;
@@ -47,17 +63,20 @@ export class Input {
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
+    if (this.synthetic) return;
     this.down.delete(e.code);
     this.releasedThisFrame.add(e.code);
   };
 
   /** Losing focus must clear held keys or the player walks off on their own. */
   private onBlur = (): void => {
+    if (this.synthetic) return;
     this.down.clear();
     this.buttons = 0;
   };
 
   private onPointerLockChange = (): void => {
+    if (this.synthetic) return;
     this.locked = document.pointerLockElement === this.canvas;
     if (!this.locked) {
       this.down.clear();
@@ -66,19 +85,21 @@ export class Input {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
+    if (this.synthetic) return;
     const bit = 1 << e.button;
     if (!(this.buttons & bit)) this.buttonsPressed |= bit;
     this.buttons |= bit;
   };
 
   private onMouseUp = (e: MouseEvent): void => {
+    if (this.synthetic) return;
     const bit = 1 << e.button;
     if (this.buttons & bit) this.buttonsReleased |= bit;
     this.buttons &= ~bit;
   };
 
   private onMouseMove = (e: MouseEvent): void => {
-    if (!this.locked) return;
+    if (this.synthetic || !this.locked) return;
     this.mouseDX += e.movementX;
     this.mouseDY += e.movementY;
   };
@@ -87,6 +108,40 @@ export class Input {
     if (this.locked) e.preventDefault();
     this.wheelDelta += Math.sign(e.deltaY);
   };
+
+  /** Switches to script-driven input and pretends the pointer is captured. */
+  beginSynthetic(): void {
+    this.synthetic = true;
+    this.locked = true;
+    this.down.clear();
+    this.buttons = 0;
+  }
+
+  injectKey(code: string, down: boolean): void {
+    if (down) {
+      if (!this.down.has(code)) this.pressedThisFrame.add(code);
+      this.down.add(code);
+    } else {
+      if (this.down.has(code)) this.releasedThisFrame.add(code);
+      this.down.delete(code);
+    }
+  }
+
+  injectMouse(dx: number, dy: number): void {
+    this.mouseDX += dx;
+    this.mouseDY += dy;
+  }
+
+  injectButton(button: number, down: boolean): void {
+    const bit = 1 << button;
+    if (down) {
+      if (!(this.buttons & bit)) this.buttonsPressed |= bit;
+      this.buttons |= bit;
+    } else {
+      if (this.buttons & bit) this.buttonsReleased |= bit;
+      this.buttons &= ~bit;
+    }
+  }
 
   requestLock(): void {
     void this.canvas.requestPointerLock();

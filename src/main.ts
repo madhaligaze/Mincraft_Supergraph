@@ -16,7 +16,8 @@ import {
   loadSettings, saveSettings, presetSettings, type PresetName, type Settings,
 } from './core/settings.ts';
 import { BIOME_FOG_DENSITY, BIOME_WATER_RGB } from './world/biomes.ts';
-import { Block } from './world/blocks.ts';
+import { Block, BLOCKS } from './world/blocks.ts';
+import { isWater } from './world/fluids.ts';
 import { vec3, clamp } from './core/math.ts';
 
 const canvas = document.getElementById('viewport') as HTMLCanvasElement;
@@ -306,6 +307,50 @@ async function boot(): Promise<void> {
       return best;
     },
     stats: () => ({ world: world.stats(), render: renderer.stats }),
+    /** Block id -> registry name, so a test can report what it actually found. */
+    blockName: (id: number) => BLOCKS[id]?.name ?? `#${id}`,
+    /** True for water in any form, source or flow. */
+    isWater,
+
+    // --- playing from a script ---
+    //
+    // Everything above drives the *camera*. This drives the *game*: it starts
+    // the simulation without pointer lock, which headless Chrome cannot grant,
+    // and feeds synthetic keys and mouse deltas through the same path a person
+    // uses. Without it nothing that needs time to pass — walking, digging,
+    // water flowing, breath running out — can be exercised from outside.
+    /** Starts the world running with script-driven input. */
+    play() {
+      overlay.hidden = true;
+      hud.setPlaying(true);
+      input.beginSynthetic();
+      running = true;
+      lastTime = performance.now();
+      return true;
+    },
+    get running() { return running; },
+    /**
+     * Runs the fluid simulation forward by `steps` ticks, now.
+     *
+     * The simulation is frame-paced, and a headless browser on software
+     * rendering manages a few frames a second — so a spill that takes two
+     * seconds in the game takes a minute to watch from a test, and a test that
+     * slow gets written to be lenient instead of correct. This is the same
+     * `update` the frame loop calls, with the same period.
+     */
+    tickFluids(steps = 1) {
+      for (let i = 0; i < steps; i++) world.fluids.update(0.25);
+      return world.fluids.pending;
+    },
+    /** Batched box fill, for building test rigs and structures from a script. */
+    fill: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, b: number) =>
+      world.fillBlocks(x0, y0, z0, x1, y1, z1, b),
+    /** Holds or releases a key, by KeyboardEvent.code. */
+    key: (code: string, down: boolean) => input.injectKey(code, down),
+    /** Adds a mouse delta in pixels, exactly as pointer lock would report it. */
+    mouse: (dx: number, dy: number) => input.injectMouse(dx, dy),
+    /** Holds or releases a mouse button: 0 break, 2 place. */
+    button: (index: number, down: boolean) => input.injectButton(index, down),
     /** Switches to a named quality preset, as the settings panel would. */
     setPreset(name: PresetName) {
       preset = name;
@@ -502,6 +547,9 @@ async function boot(): Promise<void> {
       time: renderer.sky.timeOfDay, hotbar: player.hotbarIndex,
     });
     world.updateSave(dt);
+    // Fluids tick on their own clock inside; passing dt every frame is what
+    // lets them run at a fixed rate regardless of frame rate.
+    if (running) world.fluids.update(dt);
     accumulate('world', performance.now() - mark);
 
     // Nearby emissive blocks change slowly; rescanning every frame would be

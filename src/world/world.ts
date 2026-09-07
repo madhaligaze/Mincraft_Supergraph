@@ -15,7 +15,7 @@
 
 import {
   CHUNK_SIZE, CHUNK_MASK, SECTION_COUNT, SECTION_HEIGHT, WORLD_HEIGHT,
-  SEA_LEVEL, chunkKey, columnIndex, CHUNK_AREA,
+  SEA_LEVEL, chunkKey, keyToChunkX, keyToChunkZ, columnIndex, CHUNK_AREA,
 } from './constants.ts';
 import {
   ColumnData, ColumnStore, allocateColumnBuffer, handleOf,
@@ -29,6 +29,7 @@ import type { GiRequest, GiResponse } from './giWorker.ts';
 import { GI_CELL, GI_SIZE_XZ, type GiResult } from './gi.ts';
 import type { WorldSave, SavedState } from './persistence.ts';
 import { Block, BLOCK_FLAGS, BlockFlag, isOpaque, growsGrass, BLOCK_LIGHT } from './blocks.ts';
+import { FluidSim } from './fluids.ts';
 import { BIOMES, BIOME_WATER_RGB } from './biomes.ts';
 import { hash2i } from '../core/math.ts';
 
@@ -908,7 +909,118 @@ export class World {
     // An edit changes what bounces light. Not immediately — the relight has to
     // land first — but soon enough that walling yourself in goes dark.
     this.giTimer = Math.min(this.giTimer, 0.4);
+    this.fluids.schedule(x, y, z);
     return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Fluids
+  // -------------------------------------------------------------------------
+
+  readonly fluids = new FluidSim(this);
+
+  /** Columns a fluid tick has written to, relit once when the tick ends. */
+  private readonly fluidTouched = new Set<number>();
+
+  /**
+   * A fluid's write path.
+   *
+   * Identical to `setBlock` except that it does not relight. A flow front can
+   * change two hundred cells in a tick and `setBlock` relights the whole column
+   * for each one — a hundred full-column light floods per tick, which is orders
+   * of magnitude more work than the meshing it was meant to support. The
+   * relights are collected here and done once per column in
+   * `flushFluidBlocks`, which is both correct and bounded.
+   *
+   * It also does not schedule the neighbours: the simulation owns its own
+   * queue and knows better than this function which cells its change reaches.
+   */
+  setFluidBlock(x: number, y: number, z: number, block: number): boolean {
+    if (y < 0 || y >= WORLD_HEIGHT) return false;
+    const cx = x >> 5;
+    const cz = z >> 5;
+    const column = this.store.get(cx, cz);
+    const state = this.states.get(chunkKey(cx, cz));
+    // `Generated` is enough, unlike `setBlock`, and the difference is not a
+    // detail: a block edit drops its column back to `Generated` for the
+    // relight, and requiring `Lit` here meant every fluid write in the seconds
+    // after an edit failed — that is, exactly the writes the edit caused.
+    if (!column || !state || state.stage < Stage.Generated) return false;
+
+    const lx = x & CHUNK_MASK;
+    const lz = z & CHUNK_MASK;
+    const index = columnIndex(lx, y, lz);
+    if (column.blocks[index] === block) return false;
+
+    column.blocks[index] = block;
+    this.save?.record(cx, cz, index, block);
+    this.refreshHeightmaps(column, lx, lz);
+    this.markSectionsDirtyAround(x, y, z);
+
+    this.fluidTouched.add(chunkKey(cx, cz));
+    // A cell on a chunk border changes what the neighbour's light skirt sees.
+    if (lx === 0) this.fluidTouched.add(chunkKey(cx - 1, cz));
+    if (lx === CHUNK_MASK) this.fluidTouched.add(chunkKey(cx + 1, cz));
+    if (lz === 0) this.fluidTouched.add(chunkKey(cx, cz - 1));
+    if (lz === CHUNK_MASK) this.fluidTouched.add(chunkKey(cx, cz + 1));
+    return true;
+  }
+
+  /**
+   * Writes a box of blocks in one go.
+   *
+   * `setBlock` is the wrong tool for more than a handful of cells: it relights
+   * the whole column for each one, and because a relight drops the column out
+   * of `Lit`, the *next* call is refused until it finishes. Building anything
+   * from a script therefore turned into a retry loop pacing itself at one block
+   * per few hundred milliseconds.
+   *
+   * This shares the fluid path — write, mark sections dirty, relight once at
+   * the end — which is the same batching problem with the same answer. Returns
+   * how many cells actually changed.
+   */
+  fillBlocks(
+    x0: number, y0: number, z0: number,
+    x1: number, y1: number, z1: number,
+    block: number,
+  ): number {
+    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
+    const minY = Math.max(0, Math.min(y0, y1));
+    const maxY = Math.min(WORLD_HEIGHT - 1, Math.max(y0, y1));
+    const minZ = Math.min(z0, z1), maxZ = Math.max(z0, z1);
+
+    let changed = 0;
+    for (let y = minY; y <= maxY; y++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        for (let x = minX; x <= maxX; x++) {
+          if (this.setFluidBlock(x, y, z, block)) {
+            changed++;
+            this.fluids.schedule(x, y, z);
+          }
+        }
+      }
+    }
+    if (changed > 0) this.flushFluidBlocks();
+    return changed;
+  }
+
+  /** Whether this cell's column exists at all, loaded or still generating. */
+  hasColumnAt(x: number, z: number): boolean {
+    return this.states.has(chunkKey(x >> 5, z >> 5));
+  }
+
+  flushFluidBlocks(): void {
+    if (this.fluidTouched.size === 0) return;
+    for (const key of this.fluidTouched) {
+      const state = this.states.get(key);
+      if (!state || state.stage !== Stage.Lit) continue;
+      const column = this.store.get(keyToChunkX(key), keyToChunkZ(key));
+      if (column) column.lit = false;
+      state.stage = Stage.Generated;
+    }
+    this.fluidTouched.clear();
+    this.queueDirty = true;
+    this.giTimer = Math.min(this.giTimer, 0.8);
   }
 
   private markForRelight(cx: number, cz: number): void {

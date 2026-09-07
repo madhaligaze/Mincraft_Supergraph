@@ -47,6 +47,22 @@ export const enum Block {
   FlowerBlue,
   DeadBush,
   Cactus,
+
+  /**
+   * Flowing fluid, one id per level.
+   *
+   * Minecraft keeps the level in block metadata; there is no metadata here, so
+   * each level is its own block id. It costs nothing — the id byte had room —
+   * and every table in this file is already indexed by id, so a level behaves
+   * like a material everywhere without a second lookup path.
+   *
+   * Level 1 is the thickest and 7 the thinnest; a source is level 0 and is the
+   * plain `Water` / `Lava` above. Water reaches seven blocks from its source,
+   * lava three, which is what the two ranges are for.
+   */
+  WaterFlow1, WaterFlow2, WaterFlow3, WaterFlow4, WaterFlow5, WaterFlow6, WaterFlow7,
+  LavaFlow1, LavaFlow2, LavaFlow3,
+
   Count,
 }
 
@@ -330,6 +346,32 @@ register(def({
   flags: SOLID_OPAQUE | BlockFlag.Harmful, roughness: 0.85, hardness: 0.4,
 }));
 
+// --- flowing fluids ---
+//
+// One block per level, sharing the source's texture and material. They are not
+// placeable: a player places sources, and the simulation owns everything else.
+
+const WATER_FLOW = [
+  Block.WaterFlow1, Block.WaterFlow2, Block.WaterFlow3, Block.WaterFlow4,
+  Block.WaterFlow5, Block.WaterFlow6, Block.WaterFlow7,
+] as const;
+
+const LAVA_FLOW = [Block.LavaFlow1, Block.LavaFlow2, Block.LavaFlow3] as const;
+
+WATER_FLOW.forEach((id, i) => register(def({
+  id, name: `water_flow_${i + 1}`, label: 'Вода (течение)', textures: 'water',
+  render: RenderKind.Liquid,
+  flags: BlockFlag.Passable | BlockFlag.Fluid | BlockFlag.CullsSameNeighbour,
+  roughness: 0.02, lightAttenuation: 1, hardness: 1e9, placeable: false,
+})));
+
+LAVA_FLOW.forEach((id, i) => register(def({
+  id, name: `lava_flow_${i + 1}`, label: 'Лава (течение)', textures: 'lava',
+  render: RenderKind.Liquid,
+  flags: BlockFlag.Passable | BlockFlag.Fluid | BlockFlag.Harmful,
+  roughness: 0.6, light: 15, lightAttenuation: 1, hardness: 1e9, placeable: false,
+})));
+
 for (let id = 0; id < Block.Count; id++) {
   if (!DEFS[id]) throw new Error(`Блок ${id} не зарегистрирован`);
 }
@@ -483,6 +525,69 @@ const SOUND_OVERRIDES: Partial<Record<Block, SoundFamily>> = {
 export const BLOCK_SOUND = new Uint8Array(Block.Count);
 for (const [id, family] of Object.entries(SOUND_OVERRIDES)) {
   BLOCK_SOUND[Number(id)] = SOUND_FAMILIES.indexOf(family as SoundFamily);
+}
+
+// ---------------------------------------------------------------------------
+// Fluids
+// ---------------------------------------------------------------------------
+
+/** No fluid. Above every real level, so `level(n) + 1 > NOT_FLUID` never wraps. */
+export const NOT_FLUID = 255;
+
+/**
+ * Fluid level per block id: 0 for a source, 1..7 for flowing, 255 for anything
+ * that is not a fluid. One flat array so the mesher and the simulation both
+ * read a level with a single indexed load.
+ */
+export const FLUID_LEVEL = new Uint8Array(Block.Count).fill(NOT_FLUID);
+
+/** Which fluid a block belongs to: 0 none, 1 water, 2 lava. */
+export const FLUID_KIND = new Uint8Array(Block.Count);
+export const FLUID_WATER = 1;
+export const FLUID_LAVA = 2;
+
+/** Source block of each fluid kind, indexed by `FLUID_KIND`. */
+export const FLUID_SOURCE: readonly Block[] = [Block.Air, Block.Water, Block.Lava];
+
+/** Flowing block per kind and level; index `[kind][level - 1]`. */
+export const FLUID_FLOWING: ReadonlyArray<readonly Block[]> = [[], WATER_FLOW, LAVA_FLOW];
+
+/** How far each fluid spreads from its source, in blocks. */
+export const FLUID_RANGE: readonly number[] = [0, 7, 3];
+
+FLUID_LEVEL[Block.Water] = 0;
+FLUID_KIND[Block.Water] = FLUID_WATER;
+FLUID_LEVEL[Block.Lava] = 0;
+FLUID_KIND[Block.Lava] = FLUID_LAVA;
+WATER_FLOW.forEach((id, i) => { FLUID_LEVEL[id] = i + 1; FLUID_KIND[id] = FLUID_WATER; });
+LAVA_FLOW.forEach((id, i) => { FLUID_LEVEL[id] = i + 1; FLUID_KIND[id] = FLUID_LAVA; });
+
+/**
+ * How far below the top of its cell a fluid's surface sits, in eighths.
+ *
+ * A source is a quarter of a block down — the number the shoreline was tuned
+ * against, see `emitQuad` — and each level drops further, so a flow reads as
+ * thinning out as it runs. The last two levels share a depth because an eighth
+ * of a block is as thin as the surface can be drawn while still being a
+ * surface.
+ */
+export const FLUID_SURFACE_DROP = new Uint8Array(Block.Count);
+const DROP_BY_LEVEL = [2, 3, 4, 5, 6, 6, 7, 7];
+for (let id = 0; id < Block.Count; id++) {
+  const level = FLUID_LEVEL[id];
+  if (level !== NOT_FLUID) FLUID_SURFACE_DROP[id] = DROP_BY_LEVEL[level];
+}
+
+/**
+ * Whether a fluid may take this cell over.
+ *
+ * Air, and the plants a current would tear out. Matching Minecraft here matters
+ * more than it looks: grass that survives a flood makes water read as a texture
+ * rather than as something moving through the world.
+ */
+export function isWashable(id: number): boolean {
+  if (id === Block.Air) return true;
+  return BLOCK_RENDER[id] === RenderKind.Cross;
 }
 
 // --- predicates (inlined by the JIT; keep them tiny) ---
