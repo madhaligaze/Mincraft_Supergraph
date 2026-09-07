@@ -494,6 +494,35 @@ const MATERIALS: Record<TextureName, MaterialFn> = {
       mix(0.17 * t, 0.7, spine),
       1, rib * 0.7 + spine * 0.3, 0.85);
   },
+
+  // The crafting table reads as a table because of the grid, not because of the
+  // wood: a 3×3 of dark grooves on a plank top is the whole silhouette, and it
+  // is what tells it apart from a plank block across a room.
+  crafting_table_top: (u, v, _s, out, i) => {
+    const grain = fbm(u * 26, v * 8, 26, 3, 3301);
+    const gu = Math.abs(((u * 3) % 1) - 0.5) * 2;
+    const gv = Math.abs(((v * 3) % 1) - 0.5) * 2;
+    const groove = Math.max(smooth(0.86, 1.0, gu), smooth(0.86, 1.0, gv));
+    const rim = 1 - smooth(0.42, 0.5, Math.max(Math.abs(u - 0.5), Math.abs(v - 0.5)));
+    const t = (0.6 + grain * 0.34) * mix(1, 0.42, groove) * mix(0.78, 1, rim);
+    write(out, i, 0.60 * t, 0.43 * t, 0.24 * t, 1,
+      (1 - groove) * (0.5 + grain * 0.5), mix(0.7, 0.92, groove));
+  },
+
+  crafting_table_side: (u, v, _s, out, i) => {
+    // Planks below, and a band of tools along the top third — the side of the
+    // reference block is mostly read as "that dark stripe near the top".
+    const grain = fbm(u * 24, v * 10, 24, 3, 3307);
+    const band = smooth(0.60, 0.66, v) * smooth(0.90, 0.84, v);
+    const tool = smooth(0.55, 0.75, fbm(u * 9, v * 30, 9, 2, 3313)) * band;
+    const seam = smooth(0.9, 1.0, Math.abs(((v * 4) % 1) - 0.5) * 2) * (1 - band);
+    const t = (0.58 + grain * 0.36) * mix(1, 0.45, seam) * mix(1, 0.6, band);
+    write(out, i,
+      mix(0.58 * t, 0.30 * t, tool),
+      mix(0.41 * t, 0.26 * t, tool),
+      mix(0.23 * t, 0.22 * t, tool),
+      1, (1 - seam) * (0.45 + grain * 0.4) + tool * 0.3, mix(0.74, 0.9, seam));
+  },
 };
 
 function leafMaterial(
@@ -795,6 +824,7 @@ const NORMAL_STRENGTH: Partial<Record<TextureName, number>> = {
   grass_top: 1.0, clay: 0.9, oak_leaves: 1.1, birch_leaves: 1.1, spruce_leaves: 1.1,
   cobblestone: 3.2, mossy_cobblestone: 3.2, gravel: 3.0, bedrock: 2.6,
   oak_log_side: 2.6, spruce_log_side: 2.6, oak_planks: 2.2, cactus_side: 2.4,
+  crafting_table_top: 2.4, crafting_table_side: 2.2,
   tall_grass: 0.4, fern: 0.4, flower_red: 0.4, flower_yellow: 0.4,
   flower_blue: 0.4, dead_bush: 0.4,
 };

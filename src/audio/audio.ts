@@ -394,6 +394,35 @@ export class AudioEngine {
     if (!this.playSample(name, 0.42, rate)) this.playSynth(family, 0.3, rate * 0.8);
   }
 
+  /**
+   * Picking an item up: a short rising blip.
+   *
+   * Synthesised rather than sampled even when a sound pack is present, because
+   * it is a tone and not a material — and because it fires in bursts when a
+   * pile is collected, where a recorded sample would flam.
+   */
+  pickup(): void {
+    const ctx = this.ctx;
+    const master = this.master;
+    if (!ctx || !master) return;
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    const base = 620 + Math.random() * 90;
+    osc.frequency.setValueAtTime(base, now);
+    osc.frequency.exponentialRampToValueAtTime(base * 1.5, now + 0.07);
+
+    const amp = ctx.createGain();
+    amp.gain.setValueAtTime(0, now);
+    amp.gain.linearRampToValueAtTime(0.14, now + 0.006);
+    amp.gain.exponentialRampToValueAtTime(0.0005, now + 0.11);
+
+    osc.connect(amp).connect(master);
+    osc.start(now);
+    osc.stop(now + 0.13);
+  }
+
   /** A block being placed: the same set as breaking, shorter and quieter. */
   place(block: number): void {
     if (!this.ctx) return;

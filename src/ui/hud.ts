@@ -6,33 +6,13 @@
  * layout code.
  */
 
-import { BLOCKS, HOTBAR, type Block } from '../world/blocks.ts';
+import { HOTBAR_SLOTS } from '../world/blocks.ts';
 import { BIOMES } from '../world/biomes.ts';
 import type { Settings, PresetName } from '../core/settings.ts';
 import { presetSettings } from '../core/settings.ts';
-
-/** Representative colour per hotbar entry, for the slot swatch. */
-const SWATCHES: Partial<Record<Block, string>> = {};
-
-function swatchFor(block: Block): string {
-  const cached = SWATCHES[block];
-  if (cached) return cached;
-  const name = BLOCKS[block].name;
-  const table: Record<string, string> = {
-    grass_block: 'linear-gradient(#6f9f43, #5b8036 45%, #6b4d2e 46%, #4e3720)',
-    stone: 'linear-gradient(#8d8d92, #6e6e73)',
-    cobblestone: 'linear-gradient(#8a8a8f, #5c5c61)',
-    oak_planks: 'linear-gradient(#b08248, #8a6134)',
-    oak_log: 'linear-gradient(#7a5a32, #55391f)',
-    sand: 'linear-gradient(#ded0a2, #c4b382)',
-    glass: 'linear-gradient(rgba(200,225,240,.55), rgba(160,195,215,.35))',
-    glowstone: 'linear-gradient(#ffd88a, #d99a3a)',
-    water: 'linear-gradient(#3d7fa6, #22506e)',
-  };
-  const value = table[name] ?? 'linear-gradient(#888, #555)';
-  SWATCHES[block] = value;
-  return value;
-}
+import type { Inventory } from '../game/inventory.ts';
+import { itemDef } from '../game/items.ts';
+import type { IconSet } from './icons.ts';
 
 export interface HudCallbacks {
   onSettingsChange(settings: Settings, preset: PresetName): void;
@@ -49,8 +29,15 @@ export class Hud {
   private readonly hudEl: HTMLElement;
   private readonly breathEl: HTMLElement;
 
+  private readonly heldLabelEl: HTMLElement;
+
   private slots: HTMLElement[] = [];
   private activeSlot = -1;
+  /** Last inventory version painted into the hotbar. */
+  private hotbarVersion = -1;
+  /** Seconds left on the "what am I holding" label. */
+  private heldLabelTimer = 0;
+  private heldLabelText = '';
 
   private bubbles: HTMLElement[] = [];
   private bubblesLeft = -1;
@@ -68,6 +55,8 @@ export class Hud {
   constructor(
     settings: Settings,
     preset: PresetName,
+    private readonly inventory: Inventory,
+    private readonly icons: IconSet,
     private readonly callbacks: HudCallbacks,
   ) {
     this.settings = { ...settings };
@@ -80,29 +69,106 @@ export class Hud {
     this.hudEl = document.getElementById('hud')!;
     this.breathEl = document.getElementById('breath')!;
 
+    this.heldLabelEl = document.createElement('div');
+    this.heldLabelEl.id = 'held-label';
+    this.heldLabelEl.hidden = true;
+    this.hudEl.insertBefore(this.heldLabelEl, this.hotbarEl);
+
     this.buildHotbar();
     this.buildSettings();
   }
 
   private buildHotbar(): void {
     this.hotbarEl.textContent = '';
-    this.slots = HOTBAR.map((block, index) => {
+    this.slots = [];
+    for (let index = 0; index < HOTBAR_SLOTS; index++) {
       const slot = document.createElement('div');
       slot.className = 'slot';
 
-      const swatch = document.createElement('div');
-      swatch.className = 'swatch';
-      swatch.style.background = swatchFor(block);
-      slot.appendChild(swatch);
+      const icon = document.createElement('div');
+      icon.className = 'icon';
+      slot.appendChild(icon);
 
-      const label = document.createElement('span');
-      label.textContent = String(index + 1);
-      slot.appendChild(label);
+      const count = document.createElement('span');
+      count.className = 'count';
+      slot.appendChild(count);
 
-      slot.title = BLOCKS[block].label;
+      const key = document.createElement('span');
+      key.className = 'digit';
+      key.textContent = String(index + 1);
+      slot.appendChild(key);
+
+      const wear = document.createElement('div');
+      wear.className = 'wear';
+      wear.hidden = true;
+      slot.appendChild(wear);
+
       this.hotbarEl.appendChild(slot);
-      return slot;
-    });
+      this.slots.push(slot);
+    }
+  }
+
+  /**
+   * Repaints the hotbar from the bag, and only when the bag changed.
+   *
+   * Called every frame; the version check is what keeps it from rebuilding nine
+   * slots sixty times a second while nothing happens.
+   */
+  updateHotbar(dt: number): void {
+    if (this.inventory.version !== this.hotbarVersion) {
+      this.hotbarVersion = this.inventory.version;
+      for (let i = 0; i < this.slots.length; i++) {
+        const slot = this.slots[i];
+        const item = this.inventory.get(i);
+        const icon = slot.querySelector('.icon') as HTMLElement;
+        const count = slot.querySelector('.count') as HTMLElement;
+        const wear = slot.querySelector('.wear') as HTMLElement;
+
+        if (!item) {
+          icon.style.backgroundImage = '';
+          count.textContent = '';
+          wear.hidden = true;
+          slot.title = '';
+          continue;
+        }
+
+        const def = itemDef(item.id);
+        icon.style.backgroundImage = `url(${this.icons.urls[item.id] ?? ''})`;
+        count.textContent = item.count > 1 ? String(item.count) : '';
+        slot.title = def.label;
+
+        if (def.durability > 0 && item.damage > 0) {
+          const left = Math.max(0, 1 - item.damage / def.durability);
+          wear.hidden = false;
+          wear.style.width = `${left * 100}%`;
+          wear.style.background = `hsl(${Math.round(left * 110)}, 85%, 45%)`;
+        } else {
+          wear.hidden = true;
+        }
+      }
+    }
+
+    if (this.heldLabelTimer > 0) {
+      this.heldLabelTimer -= dt;
+      if (this.heldLabelTimer <= 0) this.heldLabelEl.hidden = true;
+    }
+  }
+
+  /** Names what just came into hand, the way the reference does on a slot change. */
+  showHeldLabel(): void {
+    const held = this.inventory.held;
+    const text = held ? itemDef(held.id).label : '';
+    if (!text) {
+      this.heldLabelEl.hidden = true;
+      this.heldLabelTimer = 0;
+      return;
+    }
+    if (text !== this.heldLabelText) {
+      this.heldLabelText = text;
+      this.heldLabelEl.textContent = text;
+    }
+    this.heldLabelEl.hidden = false;
+    this.heldLabelTimer = 2;
   }
 
   setPlaying(playing: boolean): void {
@@ -111,11 +177,24 @@ export class Hud {
     document.body.classList.toggle('playing', playing);
   }
 
+  /**
+   * Hides the on-screen hotbar while a window is open.
+   *
+   * The window carries its own copy of the hotbar row — that is what makes
+   * dragging things into it possible — and showing both at once reads as two
+   * hotbars that disagree.
+   */
+  setWindowOpen(open: boolean): void {
+    this.hudEl.hidden = open;
+    this.crosshairEl.hidden = open;
+  }
+
   setHotbarIndex(index: number): void {
     if (index === this.activeSlot) return;
     this.slots[this.activeSlot]?.classList.remove('active');
     this.slots[index]?.classList.add('active');
     this.activeSlot = index;
+    this.showHeldLabel();
   }
 
   toggleStats(): void {

@@ -8,8 +8,11 @@
 
 import { Input } from '../core/input.ts';
 import { World } from '../world/world.ts';
-import { Block, BLOCK_FLAGS, BlockFlag, HOTBAR, isFluid } from '../world/blocks.ts';
+import { Block, BLOCK_FLAGS, BlockFlag, HOTBAR_SLOTS, isFluid } from '../world/blocks.ts';
 import { isWater } from '../world/fluids.ts';
+import type { Inventory } from '../game/inventory.ts';
+import { blockOfItem } from '../game/items.ts';
+import { breakSeconds } from '../game/mining.ts';
 import { WORLD_HEIGHT } from '../world/constants.ts';
 import {
   Vec3, vec3, v3set, clamp, damp, lerp, DEG2RAD, saturate,
@@ -46,6 +49,9 @@ const AIR_FRICTION = 0.6;
 
 const REACH = 6.0;
 
+/** Blocks that answer a right-click themselves instead of being built on. */
+const USABLE = new Set<number>([Block.CraftingTable]);
+
 /** Depth over which the water around the camera reaches its darkest, in blocks. */
 const SUBMERSION_DEPTH = 20;
 /** How long a full breath lasts underwater. */
@@ -65,12 +71,23 @@ const MAX_PHYSICS_STEP = 0.05;
 
 /** What an interaction did to the world, for the caller to react to. */
 export interface BlockEvent {
-  kind: 'break' | 'place';
-  /** The block that was broken, or the one that was placed. */
+  /** `use` is a right-click the block itself answered — a crafting table. */
+  kind: 'break' | 'place' | 'use';
+  /** The block that was broken, placed, or used. */
   block: number;
   x: number;
   y: number;
   z: number;
+}
+
+/** How far along the block under the crosshair is, for the HUD and the shader. */
+export interface BreakState {
+  x: number;
+  y: number;
+  z: number;
+  block: number;
+  /** 0..1. */
+  progress: number;
 }
 
 export interface PlayerCamera {
@@ -109,7 +126,17 @@ export class Player {
   /** True once breath has run out and the player is being pressed to surface. */
   drowning = false;
 
-  hotbarIndex = 0;
+  /**
+   * The block being mined right now, or null.
+   *
+   * Public because three other systems need it and none of them should have to
+   * ask twice: the renderer draws the cracks, the HUD could draw a bar, and the
+   * audio wants to keep a digging loop going.
+   */
+  breaking: BreakState | null = null;
+
+  /** Set while an inventory window is open: the world must not react to clicks. */
+  uiOpen = false;
 
   readonly camera: PlayerCamera = {
     position: vec3(),
@@ -128,15 +155,30 @@ export class Player {
   /** Blocks per second of downward speed at the moment of landing. */
   private lastFallSpeed = 0;
 
-  constructor(private readonly world: World, private readonly input: Input) {}
+  constructor(
+    private readonly world: World,
+    private readonly input: Input,
+    readonly inventory: Inventory,
+  ) {}
 
   setPosition(x: number, y: number, z: number): void {
     v3set(this.position, x, y, z);
     v3set(this.velocity, 0, 0, 0);
   }
 
+  /** The hotbar slot in hand. Lives on the inventory; mirrored here for the save. */
+  get hotbarIndex(): number {
+    return this.inventory.selected;
+  }
+
+  set hotbarIndex(index: number) {
+    this.inventory.selected = clamp(index | 0, 0, HOTBAR_SLOTS - 1);
+  }
+
+  /** The block the held item would place, or `Block.Air` for a stick. */
   get selectedBlock(): Block {
-    return HOTBAR[this.hotbarIndex];
+    const held = this.inventory.held;
+    return held ? blockOfItem(held.id) : Block.Air;
   }
 
   update(dt: number, baseFov: number): void {
@@ -178,11 +220,11 @@ export class Player {
   }
 
   private handleHotbar(): void {
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < HOTBAR_SLOTS; i++) {
       if (this.input.wasPressed(`Digit${i + 1}`)) this.hotbarIndex = i;
     }
     if (this.input.wheelDelta !== 0) {
-      const count = HOTBAR.length;
+      const count = HOTBAR_SLOTS;
       this.hotbarIndex = (this.hotbarIndex + this.input.wheelDelta + count) % count;
     }
   }
@@ -466,19 +508,61 @@ export class Player {
     );
   }
 
-  /** Handles break and place. Returns what happened, for the audio and light. */
-  interact(): BlockEvent | null {
-    const hit = this.pick();
-    if (!hit) return null;
-
-    if (this.input.wasButtonPressed(0)) {
-      if (hit.block === Block.Bedrock) return null;
-      return this.world.setBlock(hit.x, hit.y, hit.z, Block.Air)
-        ? { kind: 'break', block: hit.block, x: hit.x, y: hit.y, z: hit.z }
-        : null;
+  /**
+   * Mining, placing and using. Returns what happened, for audio, light and drops.
+   *
+   * Mining is a **held** action now, not a click: progress accumulates while the
+   * button is down and the crosshair stays on the same block, and resets the
+   * moment either changes. That reset is the part that makes it feel right —
+   * glancing away mid-swing has to cost the swing, or the timer stops being
+   * something the player is doing and becomes something happening to them.
+   */
+  interact(dt: number): BlockEvent | null {
+    if (this.uiOpen) {
+      this.breaking = null;
+      return null;
     }
 
-    if (this.input.wasButtonPressed(2)) {
+    const hit = this.pick();
+
+    if (this.input.isButtonDown(0) && hit) {
+      const current = this.breaking;
+      if (!current || current.x !== hit.x || current.y !== hit.y ||
+          current.z !== hit.z || current.block !== hit.block) {
+        this.breaking = { x: hit.x, y: hit.y, z: hit.z, block: hit.block, progress: 0 };
+      }
+
+      const state = this.breaking!;
+      const seconds = breakSeconds(hit.block, this.inventory.held);
+      if (!Number.isFinite(seconds)) {
+        // Bedrock and fluids: keep the crosshair on it, never make progress.
+        state.progress = 0;
+      } else if (seconds <= 0) {
+        state.progress = 1;
+      } else {
+        state.progress += dt / seconds;
+      }
+
+      if (state.progress >= 1) {
+        this.breaking = null;
+        return this.world.setBlock(hit.x, hit.y, hit.z, Block.Air)
+          ? { kind: 'break', block: hit.block, x: hit.x, y: hit.y, z: hit.z }
+          : null;
+      }
+    } else {
+      this.breaking = null;
+    }
+
+    if (this.input.wasButtonPressed(2) && hit) {
+      // The block gets the click first. Sneaking overrides that, which is how a
+      // player puts a block down on top of a crafting table.
+      if (!this.sneaking && USABLE.has(hit.block)) {
+        return { kind: 'use', block: hit.block, x: hit.x, y: hit.y, z: hit.z };
+      }
+
+      const placing = this.selectedBlock;
+      if (placing === Block.Air) return null;
+
       const x = hit.x + hit.nx;
       const y = hit.y + hit.ny;
       const z = hit.z + hit.nz;
@@ -494,10 +578,9 @@ export class Player {
       const replaceable = target === Block.Air ||
         (BLOCK_FLAGS[target] & BlockFlag.Passable) !== 0;
 
-      if (!overlapsPlayer && replaceable) {
-        return this.world.setBlock(x, y, z, this.selectedBlock)
-          ? { kind: 'place', block: this.selectedBlock, x, y, z }
-          : null;
+      if (!overlapsPlayer && replaceable && this.world.setBlock(x, y, z, placing)) {
+        this.inventory.consumeHeld(1);
+        return { kind: 'place', block: placing, x, y, z };
       }
     }
 

@@ -25,6 +25,14 @@ export interface SavedState {
   /** 0..1 through the day. */
   time: number;
   hotbar: number;
+  /**
+   * The bag, as flat `[slot, item, count, damage]` quads.
+   *
+   * Optional because worlds saved before there was an inventory still have to
+   * load; a missing field means an empty bag, which is also what a new world
+   * starts with, so there is nothing to migrate.
+   */
+  inventory?: number[];
 }
 
 const DB_NAME = 'supergraph';
@@ -126,10 +134,13 @@ export class WorldSave {
    */
   recordState(next: SavedState): void {
     const prev = this.playerState;
+    // The inventory is compared by reference on purpose: the caller hands over
+    // the *same* array while nothing has changed and a fresh one when it has,
+    // so this stays one pointer comparison instead of a deep walk every frame.
     if (prev &&
       Math.abs(prev.x - next.x) < 0.5 && Math.abs(prev.y - next.y) < 0.5 &&
       Math.abs(prev.z - next.z) < 0.5 && Math.abs(prev.time - next.time) < 0.004 &&
-      prev.hotbar === next.hotbar) return;
+      prev.hotbar === next.hotbar && prev.inventory === next.inventory) return;
     this.playerState = next;
     this.stateDirty = true;
   }

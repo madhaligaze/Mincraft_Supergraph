@@ -134,11 +134,48 @@ body.playing #viewport { cursor: none; }
   transition: border-color 120ms ease, background 120ms ease;
 }
 
-.slot .swatch {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  box-shadow: inset 0 -6px 8px rgba(0, 0, 0, 0.35);
+.slot {
+  position: relative;
+}
+
+.slot .icon {
+  width: 30px;
+  height: 30px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  /* Nearest-neighbour: the icons are drawn small on purpose and smoothing them
+     at 30 px turns a crisp silhouette into a smudge. */
+  image-rendering: pixelated;
+}
+
+.slot .count {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+
+.slot .digit {
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  font-size: 9px;
+  opacity: 0.45;
+}
+
+/* Durability, along the bottom edge of the slot. */
+.slot .wear,
+.islot .wear {
+  position: absolute;
+  left: 4px;
+  bottom: 3px;
+  height: 3px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
 }
 
 .slot.active {
@@ -147,9 +184,156 @@ body.playing #viewport { cursor: none; }
   color: var(--text);
 }
 
-.slot .key {
+/* --- name of the item in hand --- */
+
+#held-label {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  padding-bottom: 2px;
+  transition: opacity 200ms ease;
+}
+
+#held-label[hidden] { display: none; }
+
+/* --- inventory window --- */
+
+#inventory {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 6, 9, 0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  z-index: 18;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#inventory[hidden] { display: none; }
+
+.inv-panel {
+  padding: 16px 18px 14px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65);
+}
+
+.inv-title {
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.inv-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.inv-craft {
+  display: grid;
+  gap: 4px;
+}
+
+.inv-arrow {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.inv-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 4px;
+}
+
+/* The hotbar row sits apart from the storage rows, as in the reference. */
+.inv-hotbar-row { margin-top: 10px; }
+
+.islot {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.045);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 90ms ease, border-color 90ms ease;
+}
+
+.islot:hover { background: rgba(255, 255, 255, 0.12); }
+.islot.result { border-color: var(--accent); background: var(--accent-dim); }
+
+.islot .icon {
+  width: 30px;
+  height: 30px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+.islot .count {
   position: absolute;
-  opacity: 0;
+  right: 3px;
+  bottom: 1px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  pointer-events: none;
+}
+
+.inv-hint {
+  margin-top: 12px;
+  font-size: 10.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* The stack on the cursor: follows the mouse and must never eat its clicks. */
+.inv-cursor {
+  position: fixed;
+  width: 42px;
+  height: 42px;
+  margin: -21px 0 0 -21px;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 19;
+}
+
+.inv-cursor[hidden] { display: none; }
+
+.inv-cursor .icon {
+  width: 32px;
+  height: 32px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.7));
+}
+
+.inv-cursor .count {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
 }
 
 /* --- stats overlay --- */

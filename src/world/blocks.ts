@@ -63,6 +63,15 @@ export const enum Block {
   WaterFlow1, WaterFlow2, WaterFlow3, WaterFlow4, WaterFlow5, WaterFlow6, WaterFlow7,
   LavaFlow1, LavaFlow2, LavaFlow3,
 
+  /**
+   * Appended after the fluids on purpose.
+   *
+   * A saved edit stores the block id, so inserting an id in the middle would
+   * turn every water flow in every existing save into something else. New
+   * blocks go on the end, always.
+   */
+  CraftingTable,
+
   Count,
 }
 
@@ -128,6 +137,7 @@ export const TEXTURES = [
   'glass', 'water', 'lava',
   'tall_grass', 'fern', 'flower_red', 'flower_yellow', 'flower_blue',
   'dead_bush', 'cactus_top', 'cactus_side',
+  'crafting_table_top', 'crafting_table_side',
 ] as const;
 
 export type TextureName = (typeof TEXTURES)[number];
@@ -372,6 +382,19 @@ LAVA_FLOW.forEach((id, i) => register(def({
   roughness: 0.6, light: 15, lightAttenuation: 1, hardness: 1e9, placeable: false,
 })));
 
+/**
+ * The first block with a use rather than a shape.
+ *
+ * Right-clicking it opens the 3×3 grid, which is the whole reason it exists:
+ * the 2×2 grid in the inventory cannot make a pickaxe, and a pickaxe is what
+ * turns digging into progress.
+ */
+register(def({
+  id: Block.CraftingTable, name: 'crafting_table', label: 'Верстак',
+  textures: ['crafting_table_side', 'crafting_table_top', 'oak_planks'],
+  roughness: 0.72, hardness: 2.5,
+}));
+
 for (let id = 0; id < Block.Count; id++) {
   if (!DEFS[id]) throw new Error(`Блок ${id} не зарегистрирован`);
 }
@@ -451,6 +474,7 @@ const ALBEDO: Partial<Record<Block, readonly [number, number, number]>> = {
   [Block.BirchLog]: [0.55, 0.52, 0.44],
   [Block.SpruceLog]: [0.08, 0.05, 0.03],
   [Block.OakPlanks]: [0.30, 0.20, 0.11],
+  [Block.CraftingTable]: [0.28, 0.19, 0.10],
   [Block.OakLeaves]: [0.30, 0.30, 0.30],
   [Block.BirchLeaves]: [0.32, 0.32, 0.32],
   [Block.SpruceLeaves]: [0.26, 0.26, 0.26],
@@ -506,6 +530,7 @@ const SOUND_OVERRIDES: Partial<Record<Block, SoundFamily>> = {
   [Block.BirchLog]: 'wood',
   [Block.SpruceLog]: 'wood',
   [Block.OakPlanks]: 'wood',
+  [Block.CraftingTable]: 'wood',
   [Block.OakLeaves]: 'grass',
   [Block.BirchLeaves]: 'grass',
   [Block.SpruceLeaves]: 'grass',
@@ -622,8 +647,5 @@ export function shouldRenderFace(self: number, neighbour: number): boolean {
   return true;
 }
 
-/** Hotbar contents, in order. */
-export const HOTBAR: readonly Block[] = [
-  Block.GrassBlock, Block.Stone, Block.Cobblestone, Block.OakPlanks,
-  Block.OakLog, Block.Sand, Block.Glass, Block.Glowstone, Block.Water,
-];
+/** How many slots the hotbar row has. The inventory owns what is in them. */
+export const HOTBAR_SLOTS = 9;

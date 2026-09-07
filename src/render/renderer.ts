@@ -112,7 +112,24 @@ export interface FrameState {
   pointLightCount: number;
   /** Fog density multiplier from the biome the camera is in. */
   biomeFog: number;
+  /**
+   * Dropped items, as instance data: 12 floats each, cubes first.
+   *
+   * The game side fills this because it is the side that knows what an item is;
+   * the renderer only uploads it and draws two instanced calls. See
+   * `ITEM_INSTANCE_FLOATS` for the layout.
+   */
+  items: Float32Array;
+  /** How many leading instances are textured cubes. */
+  itemCubes: number;
+  /** How many instances after those are flat sprites. */
+  itemSprites: number;
+  /** The block being mined and how far along it is, 0..1. */
+  breaking: { x: number; y: number; z: number; progress: number } | null;
 }
+
+/** Floats per dropped-item instance: position+spin, tint+scale, layers+light. */
+export const ITEM_INSTANCE_FLOATS = 12;
 
 export interface RenderStats {
   drawCalls: number;
@@ -165,6 +182,13 @@ export class Renderer implements MeshSink {
 
   private emptyVao: WebGLVertexArrayObject;
   private sceneUbo: WebGLBuffer;
+
+  /** Instance stream for dropped items, and the VAO that reads it. */
+  private itemVao: WebGLVertexArrayObject | null = null;
+  private itemBuffer: WebGLBuffer | null = null;
+  private itemCapacity = 0;
+  /** Icon sprites for items that are not blocks. */
+  private iconArray: WebGLTexture | null = null;
   private readonly sceneData = new Float32Array(SCENE_FLOATS);
 
   // Matrices
@@ -303,6 +327,8 @@ export class Renderer implements MeshSink {
 
     this.programs.create('rain', 'weather/rain.vert.glsl', 'weather/rain.frag.glsl');
     this.programs.create('selection', 'debug/selection.vert.glsl', 'debug/selection.frag.glsl');
+    this.programs.create('break', 'debug/break.vert.glsl', 'debug/break.frag.glsl');
+    this.programs.create('item', 'entity/item.vert.glsl', 'entity/item.frag.glsl');
 
     // The sky owns three programs of its own and they live in the same cache,
     // so they have to be rebuilt here — not only in the Sky constructor, or a
@@ -322,7 +348,7 @@ export class Renderer implements MeshSink {
       'chunk.shadow', 'chunk.shadow.cutout',
       'water', 'grass', 'sky', 'clouds', 'clouds.composite',
       'ssao', 'bilateral', 'taa', 'composite', 'rain', 'selection', 'adaptation', 'wet',
-      'shafts', 'shafts.add',
+      'shafts', 'shafts.add', 'break', 'item',
     ];
     for (const name of names) this.programs.get(name).bindBlock('Scene', 0);
     this.sky.bindBlocks();
@@ -654,6 +680,12 @@ export class Renderer implements MeshSink {
 
     this.renderOpaque(frame, true);
 
+    if (frame.itemCubes + frame.itemSprites > 0) {
+      profiler.begin('items');
+      this.renderItems(frame);
+      profiler.end();
+    }
+
     profiler.begin('sky');
     this.renderSky();
     profiler.end();
@@ -704,6 +736,7 @@ export class Renderer implements MeshSink {
       profiler.end();
     }
     if (frame.selection) this.renderSelection(frame.selection);
+    if (frame.breaking && frame.breaking.progress > 0) this.renderBreaking(frame.breaking);
 
     profiler.begin('taa');
     const resolved = this.settings.taaEnabled ? this.resolveTAA() : this.main.texture;
@@ -1534,6 +1567,166 @@ export class Renderer implements MeshSink {
     this.state.setBlend(false);
   }
 
+  /**
+   * Uploads the item icon sheet.
+   *
+   * Called once, from the boot sequence, with pixels a canvas drew. The world
+   * and the inventory window therefore show the same picture of a stick, which
+   * is the only way they stay in agreement as items are added.
+   */
+  setItemIcons(pixels: Uint8Array, size: number, layers: number): void {
+    const gl = this.gl;
+    if (this.iconArray) gl.deleteTexture(this.iconArray);
+
+    const texture = gl.createTexture();
+    if (!texture) throw new Error('Не удалось создать атлас иконок');
+    this.iconArray = texture;
+
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.SRGB8_ALPHA8, size, size, layers);
+    gl.texSubImage3D(
+      gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, size, size, layers,
+      gl.RGBA, gl.UNSIGNED_BYTE, pixels,
+    );
+    // Nearest: the icons are drawn at the size they are shown, and smoothing
+    // them only turns a crisp silhouette into a smudge at distance.
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+    this.state.invalidate();
+  }
+
+  /** Grows the instance buffer and (re)builds the VAO that reads it. */
+  private ensureItemBuffer(instances: number): void {
+    const gl = this.gl;
+    if (!this.itemVao) {
+      const vao = gl.createVertexArray();
+      const buffer = gl.createBuffer();
+      if (!vao || !buffer) throw new Error('Не удалось создать буфер предметов');
+      this.itemVao = vao;
+      this.itemBuffer = buffer;
+
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      const stride = ITEM_INSTANCE_FLOATS * 4;
+      for (let location = 0; location < 3; location++) {
+        gl.enableVertexAttribArray(location);
+        gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, location * 16);
+        gl.vertexAttribDivisor(location, 1);
+      }
+      gl.bindVertexArray(null);
+      this.state.invalidate();
+    }
+
+    if (instances <= this.itemCapacity) return;
+    this.itemCapacity = Math.max(64, instances * 2);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.itemBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.itemCapacity * ITEM_INSTANCE_FLOATS * 4, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
+  /**
+   * Dropped items: one instanced draw for the cubes, one for the sprites.
+   *
+   * Drawn with the opaque geometry rather than after it, so they are fogged,
+   * depth-tested against the world and picked up by TAA like everything else.
+   */
+  private renderItems(frame: FrameState): void {
+    const total = frame.itemCubes + frame.itemSprites;
+    if (total <= 0 || !this.materials) return;
+
+    const gl = this.gl;
+    const program = this.programs.get('item');
+
+    this.ensureItemBuffer(total);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.itemBuffer);
+    gl.bufferSubData(
+      gl.ARRAY_BUFFER, 0,
+      frame.items.subarray(0, total * ITEM_INSTANCE_FLOATS),
+    );
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+    this.state.useProgram(program.handle);
+    this.state.setDepthTest(true);
+    this.state.setDepthWrite(true);
+    this.state.setBlend(false);
+    this.state.setCull(true, gl.BACK);
+
+    this.state.bindTexture(0, gl.TEXTURE_2D_ARRAY, this.materials.albedo);
+    this.state.bindTexture(4, gl.TEXTURE_2D, this.sky.skyView.texture);
+    this.state.bindTexture(5, gl.TEXTURE_2D, this.sky.transmittance.texture);
+    if (this.iconArray) this.state.bindTexture(7, gl.TEXTURE_2D_ARRAY, this.iconArray);
+
+    program.int('uAlbedoArray', 0);
+    program.int('uSkyViewLut', 4);
+    program.int('uTransmittanceLut', 5);
+    program.int('uIconArray', 7);
+    program.float('uCameraRadiusKm', this.sky.cameraRadiusKm);
+    program.vec2('uHorizonAngles', this.sky.horizonAngles[0], this.sky.horizonAngles[1]);
+    program.float('uSeaLevel', SEA_LEVEL);
+    program.int('uDebugView', this.debugView);
+    program.vec3('uDebugBucket', 0.9, 0.6, 0.15);
+
+    this.state.bindVAO(this.itemVao);
+
+    if (frame.itemCubes > 0) {
+      program.int('uSprite', 0);
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, frame.itemCubes);
+      this.stats.drawCalls++;
+    }
+
+    if (frame.itemSprites > 0 && this.iconArray) {
+      // The sprite instances sit after the cubes in the same buffer, and WebGL2
+      // has no base-instance parameter — so the attribute offsets move instead.
+      const stride = ITEM_INSTANCE_FLOATS * 4;
+      const offset = frame.itemCubes * stride;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.itemBuffer);
+      for (let location = 0; location < 3; location++) {
+        gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, offset + location * 16);
+      }
+
+      program.int('uSprite', 1);
+      this.state.setCull(false);
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, frame.itemSprites);
+      this.stats.drawCalls++;
+      this.state.setCull(true, gl.BACK);
+
+      for (let location = 0; location < 3; location++) {
+        gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, location * 16);
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    }
+  }
+
+  /** Cracks on the block the player is mining. */
+  private renderBreaking(
+    breaking: { x: number; y: number; z: number; progress: number },
+  ): void {
+    const gl = this.gl;
+    const program = this.programs.get('break');
+
+    this.state.useProgram(program.handle);
+    this.state.setDepthTest(true);
+    this.state.setDepthWrite(false);
+    this.state.setBlend(true, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // Both sides: the player may be standing inside the block they are digging
+    // out from under themselves.
+    this.state.setCull(false);
+
+    program.vec3('uBlockPos', breaking.x, breaking.y, breaking.z);
+    program.float('uInflate', 0.008);
+    program.float('uProgress', breaking.progress);
+
+    this.state.bindVAO(this.emptyVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 36);
+    this.stats.drawCalls++;
+
+    this.state.setBlend(false);
+    this.state.setCull(true, gl.BACK);
+  }
+
   private renderSelection(selection: { x: number; y: number; z: number }): void {
     const gl = this.gl;
     const program = this.programs.get('selection');
@@ -1777,6 +1970,9 @@ export class Renderer implements MeshSink {
     for (const t of this.adaptationTargets) t.dispose();
     this.cloudTarget?.dispose();
     this.shaftTarget?.dispose();
+    if (this.iconArray) this.gl.deleteTexture(this.iconArray);
+    if (this.itemBuffer) this.gl.deleteBuffer(this.itemBuffer);
+    if (this.itemVao) this.gl.deleteVertexArray(this.itemVao);
     if (this.tintAtlas) this.gl.deleteTexture(this.tintAtlas);
     if (this.materials) {
       this.gl.deleteTexture(this.materials.albedo);

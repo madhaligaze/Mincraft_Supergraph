@@ -5,13 +5,21 @@
 import './ui/style.css';
 
 import { createContext, WebGL2UnavailableError } from './render/gl.ts';
-import { Renderer, type FrameState } from './render/renderer.ts';
+import { Renderer, ITEM_INSTANCE_FLOATS, type FrameState } from './render/renderer.ts';
 import { World } from './world/world.ts';
 import { WorldSave } from './world/persistence.ts';
 import { Player } from './player/player.ts';
 import { Input } from './core/input.ts';
 import { AudioEngine } from './audio/audio.ts';
 import { Hud, facingLabel } from './ui/hud.ts';
+import { Inventory } from './game/inventory.ts';
+import { ItemEntities } from './game/entities.ts';
+import { dropsFor } from './game/drops.ts';
+import { itemByName, itemDef, stack, type ItemStack } from './game/items.ts';
+import { InventoryWindow } from './ui/inventory.ts';
+import { buildIcons } from './ui/icons.ts';
+import { buildItemInstances } from './render/itemInstances.ts';
+import { matchRecipe } from './game/recipes.ts';
 import {
   loadSettings, saveSettings, presetSettings, type PresetName, type Settings,
 } from './core/settings.ts';
@@ -142,7 +150,14 @@ async function boot(): Promise<void> {
   applyWorldSettings();
 
   const input = new Input(canvas);
-  const player = new Player(world, input);
+  const inventory = new Inventory();
+  const player = new Player(world, input, inventory);
+  const items = new ItemEntities();
+
+  // Icons are drawn once, on a canvas, and used in two places: the DOM slots
+  // and — as a texture array — the sprites of items lying on the ground.
+  const icons = buildIcons(32);
+  renderer.setItemIcons(icons.pixels, icons.size, icons.layers);
 
   // A world that has been visited resumes where it was left; a new one starts
   // at a spawn point the generator picks.
@@ -155,12 +170,13 @@ async function boot(): Promise<void> {
     player.yaw = resumed.yaw;
     player.pitch = resumed.pitch;
     player.hotbarIndex = resumed.hotbar;
+    inventory.load(resumed.inventory);
     renderer.sky.timeOfDay = resumed.time;
   }
 
   const audio = new AudioEngine();
 
-  const hud = new Hud(settings, preset, {
+  const hud = new Hud(settings, preset, inventory, icons, {
     onSettingsChange(next, nextPreset) {
       settings = next;
       preset = nextPreset;
@@ -173,6 +189,24 @@ async function boot(): Promise<void> {
     },
   });
   hud.setHotbarIndex(player.hotbarIndex);
+
+  /** Throws a stack out in front of the player's eyes. */
+  function dropIntoWorld(item: ItemStack): void {
+    items.throwFrom(player.camera.position, player.camera.forward, item);
+  }
+
+  const inventoryWindow = new InventoryWindow(inventory, icons, {
+    onDrop: dropIntoWorld,
+    onVisibility(open) {
+      player.uiOpen = open;
+      hud.setWindowOpen(open);
+      // The world keeps running; only the pointer changes hands. Under
+      // synthetic input there is no pointer to hand over, and asking for the
+      // lock back would end a scripted run.
+      if (input.synthetic) return;
+      if (open) input.releaseLock(); else input.requestLock();
+    },
+  });
 
   // --- sizing ---
   function resize(): void {
@@ -314,6 +348,62 @@ async function boot(): Promise<void> {
     stats: () => ({ world: world.stats(), render: renderer.stats }),
     /** Block id -> registry name, so a test can report what it actually found. */
     blockName: (id: number) => BLOCKS[id]?.name ?? `#${id}`,
+
+    // --- the game side ---
+    //
+    // Everything a playthrough needs to check that mining, dropping, carrying
+    // and crafting actually happened, rather than that a frame was drawn.
+    inventory,
+    items,
+    inventoryWindow,
+    /** What is in the bag, as `{name, count, damage}` per filled slot. */
+    bag: () => inventory.slots.map((slot, index) => (slot
+      ? { index, name: itemDef(slot.id).label, id: slot.id,
+          item: itemDef(slot.id).name, count: slot.count, damage: slot.damage }
+      : null)).filter((s) => s !== null),
+    /** How many of a named item are carried. */
+    have: (name: string) => inventory.count(itemByName(name)),
+    /** Puts items straight into the bag, for setting a test up. */
+    give(name: string, count = 1) {
+      const id = itemByName(name);
+      if (id === 0) return -1;
+      return count - inventory.addItem(id, count);
+    },
+    /** Registry name -> item id. */
+    itemId: (name: string) => itemByName(name),
+    /** Puts an item on the ground at a spot, for looking at it. */
+    dropAt(x: number, y: number, z: number, name: string, count = 1) {
+      const id = itemByName(name);
+      if (id === 0) return false;
+      return !!items.spawn(x, y, z, stack(id, count), 0, 0, 0, 999);
+    },
+    /** Items lying on the ground. */
+    droppedItems: () => items.list.map((e) => ({
+      item: itemDef(e.item.id).name, count: e.item.count,
+      x: e.x, y: e.y, z: e.z, age: e.age,
+    })),
+    /** Progress on the block being mined, 0..1, or -1 when not mining. */
+    breakProgress: () => player.breaking?.progress ?? -1,
+    /** Lays items into the open crafting grid by name; null clears a cell. */
+    craftSet(cells: (string | null)[]) {
+      for (let i = 0; i < inventoryWindow.grid.cells.length; i++) {
+        const name = cells[i];
+        inventoryWindow.grid.set(i, name ? stack(itemByName(name), 1) : null);
+      }
+      inventoryWindow.refresh(true);
+      return inventoryWindow.grid.cells.map((c) => (c ? itemDef(c.id).name : null));
+    },
+    /** What the open grid currently makes, as a name, or null. */
+    craftResult() {
+      const result = matchRecipe(inventoryWindow.grid.cells, inventoryWindow.grid.size);
+      return result ? { item: itemDef(result.id).name, count: result.count } : null;
+    },
+    /** Opens the bag (2) or a table (3) without needing a pointer. */
+    openInventory(size = 2) {
+      inventoryWindow.show(size, size === 3 ? 'Верстак' : 'Инвентарь');
+      return inventoryWindow.isOpen;
+    },
+    closeInventory() { inventoryWindow.hide(); return inventoryWindow.isOpen; },
     /** True for water in any form, source or flow. */
     isWater,
 
@@ -406,6 +496,8 @@ async function boot(): Promise<void> {
   // --- frame loop ---
   const pointLights = new Float32Array(16 * 4);
   const underwaterTint = vec3(0.1, 0.29, 0.34);
+  /** Instance stream for dropped items; sized for the entity cap. */
+  const itemInstances = new Float32Array(256 * ITEM_INSTANCE_FLOATS);
   const frame: FrameState = {
     cameraPosition: player.camera.position,
     cameraForward: player.camera.forward,
@@ -420,12 +512,20 @@ async function boot(): Promise<void> {
     pointLights,
     pointLightCount: 0,
     biomeFog: 1,
+    items: itemInstances,
+    itemCubes: 0,
+    itemSprites: 0,
+    breaking: null,
   };
 
   let running = false;
   let lastTime = performance.now();
   let elapsed = 0;
   let lightRefreshTimer = 0;
+
+  /** Last serialised bag, and the version it was made from. See `tick`. */
+  let savedInventory: number[] = inventory.serialize();
+  let savedInventoryVersion = inventory.version;
 
   /** Rolling frame times in milliseconds, for the benchmark script. */
   const frameTimes: number[] = [];
@@ -462,7 +562,9 @@ async function boot(): Promise<void> {
   });
 
   document.addEventListener('pointerlockchange', () => {
-    if (!input.locked && running) {
+    // Losing the pointer to the inventory window is not the player walking
+    // away from the game, and must not put up the pause overlay.
+    if (!input.locked && running && !inventoryWindow.isOpen) {
       overlay.hidden = false;
       playButton.textContent = 'Продолжить';
       hud.setPlaying(false);
@@ -527,6 +629,23 @@ async function boot(): Promise<void> {
     if (input.wasPressed('F3')) hud.toggleStats();
     if (input.wasPressed('F4')) hud.toggleSettings();
 
+    if (running) {
+      // E opens the bag with its own 2×2 grid, and closes whatever is open —
+      // including a crafting table's 3×3.
+      if (input.wasPressed('KeyE')) inventoryWindow.toggle(2, 'Инвентарь');
+      if (input.wasPressed('Escape') && inventoryWindow.isOpen) inventoryWindow.hide();
+      // Q throws one; with control held, the whole stack. Nothing else in the
+      // game destroys items, so this is the only way to make room.
+      if (input.wasPressed('KeyQ') && !inventoryWindow.isOpen) {
+        const held = inventory.held;
+        if (held) {
+          const count = input.isDown('ControlLeft') ? held.count : 1;
+          const thrown = inventory.take(inventory.selected, count);
+          if (thrown) dropIntoWorld(thrown);
+        }
+      }
+    }
+
     // The player is updated even while paused, with a zero timestep. Movement
     // integrates nothing, but the camera basis is still rebuilt — so the world
     // stays visible behind the pause overlay instead of the view snapping back
@@ -536,15 +655,36 @@ async function boot(): Promise<void> {
     const beforeZ = player.position[2];
     player.update(running ? dt : 0, settings.fovDegrees);
     if (running) {
-      const event = player.interact();
+      const event = player.interact(dt);
       if (event) {
         lightRefreshTimer = 0;
-        if (event.kind === 'break') audio.dig(event.block);
-        else audio.place(event.block);
+        if (event.kind === 'break') {
+          audio.dig(event.block);
+          // The block becomes items on the ground, and the swing wears the
+          // tool. Both depend on what was in hand *at the moment it broke*, so
+          // the drops are rolled before the tool is damaged and possibly
+          // destroyed.
+          const held = inventory.held;
+          items.spawnFromBlock(event.x, event.y, event.z, dropsFor(event.block, held));
+          if (inventory.damageHeld(1)) audio.dig(event.block);
+        } else if (event.kind === 'place') {
+          audio.place(event.block);
+        } else if (event.kind === 'use' && event.block === Block.CraftingTable) {
+          inventoryWindow.show(3, 'Верстак');
+        }
       }
+
+      const picked = items.update(
+        dt, world, inventory,
+        player.position[0], player.position[1], player.position[2],
+      );
+      if (picked > 0) audio.pickup();
+
       hud.setHotbarIndex(player.hotbarIndex);
       updateAudio(dt, beforeX, beforeZ);
     }
+    hud.updateHotbar(dt);
+    inventoryWindow.refresh();
 
     renderer.sky.update(running ? dt : 0);
 
@@ -554,10 +694,17 @@ async function boot(): Promise<void> {
     world.update(player.position[0], player.position[2], world.usingWorkers ? 1 : 5);
     world.refreshAtlases();
     world.updateIndirectLight(player.position[0], player.position[2], dt);
+    // The bag is only serialised when it changed; the same array is handed over
+    // on every other frame so the save layer can tell by reference alone.
+    if (inventory.version !== savedInventoryVersion) {
+      savedInventoryVersion = inventory.version;
+      savedInventory = inventory.serialize();
+    }
     world.recordPlayerState({
       x: player.position[0], y: player.position[1], z: player.position[2],
       yaw: player.yaw, pitch: player.pitch,
       time: renderer.sky.timeOfDay, hotbar: player.hotbarIndex,
+      inventory: savedInventory,
     });
     world.updateSave(dt);
     // Fluids tick on their own clock inside; passing dt every frame is what
@@ -596,6 +743,11 @@ async function boot(): Promise<void> {
 
     frame.time = elapsed;
     frame.deltaTime = dt;
+    frame.breaking = player.breaking;
+
+    const instances = buildItemInstances(items.list, world, icons, itemInstances);
+    frame.itemCubes = instances.cubes;
+    frame.itemSprites = instances.sprites;
 
     mark = performance.now();
     renderer.render(frame);
