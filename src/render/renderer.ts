@@ -1373,7 +1373,16 @@ export class Renderer implements MeshSink {
     // tearing apart along their shared edge.
     program.vec2('uWaveFade', 48, 96);
     program.int('uSsrSteps', this.settings.waterReflections ? this.settings.ssrSteps : 0);
-    program.float('uSsrDistance', 52);
+    // Thirty-six, not fifty-two.
+    //
+    // The number was set when the water pass cost five milliseconds; it now
+    // costs eighteen, because there is far more visible water in a frame than
+    // there used to be. The march is what makes a shoreline reflect the trees
+    // standing on it, and that reads at close range; past thirty-six blocks the
+    // screen-space result is almost entirely the sky the fallback already
+    // provides, and it is being paid for at twenty-four dependent fetches a
+    // pixel across the largest surface in the frame.
+    program.float('uSsrDistance', 36);
     program.float('uRefractionStrength', this.settings.waterRefraction ? 1.0 : 0.0);
 
     this.drawBucket(program, Bucket.Water);

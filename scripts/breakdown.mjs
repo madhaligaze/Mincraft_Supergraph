@@ -43,6 +43,19 @@ const CASE_SETS = {
     { name: 'no wet ssr', changes: { wetReflections: false } },
     { name: 'no water ssr', changes: { ssrSteps: 0 } },
   ],
+  // The water pass is the most expensive thing in the frame whenever the ocean
+  // fills the screen, and it is expensive for four unrelated reasons. Turning
+  // them off one at a time is the only way to find out which one to attack:
+  // the reflection march, the detail-normal noise, the shadow lookup, and the
+  // refraction fetches all cost per water pixel, and guessing between them has
+  // been wrong before.
+  water: [
+    { name: 'no water ssr', changes: { ssrSteps: 0 } },
+    { name: 'no reflections at all', changes: { waterReflections: false, ssrSteps: 0 } },
+    { name: 'no refraction', changes: { waterRefraction: false } },
+    { name: 'no shadows', changes: { shadowsEnabled: false } },
+    { name: 'half res', changes: { resolutionScale: 0.6 } },
+  ],
   // Parallax is the one effect whose cost is bounded by distance rather than
   // by geometry, so the range case matters as much as the step count.
   parallax: [

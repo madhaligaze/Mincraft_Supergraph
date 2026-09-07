@@ -37,6 +37,9 @@ uniform int uSsrSteps;
 uniform float uSsrDistance;
 uniform float uRefractionStrength;
 
+/** Blocks beyond which water stops sampling the shadow cascades. */
+const float SHADOW_RANGE = 84.0;
+
 /** Debug view 8 paints every pass a flat colour; see renderer.ts. */
 uniform int uDebugView;
 uniform vec3 uDebugBucket;
@@ -99,9 +102,15 @@ void main() {
   // Blend detail out quickly with distance. Once a ripple is smaller than a
   // pixel the normal is pure noise, and a sharp specular lobe on top of noise
   // is the single worst source of shimmer in a scene like this. The branch
-  // matters as much as the blend: the noise is ~70 hash evaluations, and most
-  // of an ocean is past the fade.
-  float detailFade = 1.0 - saturate((viewDistance - 10.0) / 46.0);
+  // matters as much as the blend: the noise is ~290 hash evaluations per pixel,
+  // and it was measured at two milliseconds of the frame on its own.
+  //
+  // The fade used to reach fifty-six blocks and now reaches thirty-two. What
+  // makes that affordable is that the Gerstner sum moved into this shader and
+  // is evaluated per pixel: distant water is no longer flat without the ripple,
+  // it has the swell. The ripple only ever added the last centimetre of detail,
+  // and past thirty blocks that centimetre is under a pixel.
+  float detailFade = 1.0 - saturate((viewDistance - 10.0) / 22.0);
   if (vIsSurface > 0.5) {
     // Evaluated here rather than interpolated from the vertex stage: see the
     // note in water.vert.glsl about greedy-meshed ocean quads.
@@ -150,8 +159,13 @@ void main() {
   // Only on nearby water. Out on open ocean there is nothing to cast a shadow,
   // and the six-tap filter was running on every pixel of a sea that fills half
   // the screen.
+  //
+  // Its own number, not a multiple of the reflection range. They were tied
+  // together, and shortening the reflection range for cost then silently
+  // shortened the shadows too — two unrelated effects moving on one knob is how
+  // a tuning change turns into a bug report about something else.
   float shadow = 1.0;
-  if (viewDistance < uSsrDistance * 1.6) {
+  if (viewDistance < SHADOW_RANGE) {
     float shadowRotation = interleavedGradientNoise(gl_FragCoord.xy + SCENE_FRAME) * TAU;
     shadow = sampleShadow(
       vWorldPos, vec3(0.0, 1.0, 0.0), saturate(dot(N, uSunDirection.xyz)),
@@ -209,6 +223,14 @@ void main() {
   float scatterAmount = 1.0 - exp(-waterColumn * 0.13);
   vec3 refracted = mix(transmitted, scattered, scatterAmount * 0.88);
 
+  // --- fresnel ---
+  // Computed before the reflection, not after, because it decides whether the
+  // reflection is worth computing at all.
+  float NoV = saturate(dot(N, V));
+  // Schlick with water's F0 of 0.02.
+  float fresnel = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
+  fresnel = mix(fresnel, fresnel * 0.55, vIsSurface < 0.5 ? 1.0 : 0.0);
+
   // --- reflection ---
   vec3 R = reflect(viewDir, N);
   R.y = max(R.y, 0.008);
@@ -218,7 +240,19 @@ void main() {
   if (viewDistance < 90.0) skyReflection += celestialBodies(R);
 
   vec3 reflection = skyReflection;
-  if (vIsSurface > 0.5 && viewDistance < uSsrDistance) {
+
+  // The screen-space march is the most expensive thing in the frame whenever
+  // the ocean fills the screen: measured at 7.9 ms of a 44 ms frame on the
+  // target part, out of a water pass costing 18.
+  //
+  // The gate is Fresnel, and it is not a quality compromise but a statement of
+  // what Fresnel means. Water's F0 is 0.02: at forty-five degrees of incidence
+  // only two per cent of what the eye receives is reflection, and at sixty it
+  // is still under four. Marching twenty-four dependent texture fetches to
+  // refine a term contributing a few per cent of the pixel is work whose result
+  // cannot be seen. Reflection only dominates at grazing angles, and that is
+  // exactly where this still runs.
+  if (vIsSurface > 0.5 && fresnel > 0.08 && viewDistance < uSsrDistance) {
     vec3 hitColor;
     float confidence;
     if (traceReflection(vWorldPos + N * 0.06, R, hitColor, confidence)) {
@@ -228,12 +262,6 @@ void main() {
       reflection = mix(skyReflection, hitColor, confidence * rangeFade);
     }
   }
-
-  // --- fresnel ---
-  float NoV = saturate(dot(N, V));
-  // Schlick with water's F0 of 0.02.
-  float fresnel = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
-  fresnel = mix(fresnel, fresnel * 0.55, vIsSurface < 0.5 ? 1.0 : 0.0);
 
   vec3 color = mix(refracted, reflection, fresnel);
 
