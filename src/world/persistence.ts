@@ -33,6 +33,16 @@ export interface SavedState {
    * starts with, so there is nothing to migrate.
    */
   inventory?: number[];
+  /**
+   * Furnaces, as flat twelve-number records; see `Furnaces.serialize`.
+   *
+   * Block entities do not belong in the player's record long-term — they belong
+   * to the column they stand in, and that is how chests will eventually have to
+   * store theirs. A world has a handful of furnaces, so this is the cheap
+   * version that works today, and the note is here so the next person does not
+   * mistake it for a decision.
+   */
+  furnaces?: number[];
 }
 
 const DB_NAME = 'supergraph';
@@ -140,7 +150,8 @@ export class WorldSave {
     if (prev &&
       Math.abs(prev.x - next.x) < 0.5 && Math.abs(prev.y - next.y) < 0.5 &&
       Math.abs(prev.z - next.z) < 0.5 && Math.abs(prev.time - next.time) < 0.004 &&
-      prev.hotbar === next.hotbar && prev.inventory === next.inventory) return;
+      prev.hotbar === next.hotbar && prev.inventory === next.inventory &&
+      prev.furnaces === next.furnaces) return;
     this.playerState = next;
     this.stateDirty = true;
   }

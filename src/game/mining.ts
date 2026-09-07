@@ -35,6 +35,7 @@ const PICKAXE: ReadonlyArray<[Block, Tier]> = [
   [Block.Stone, Tier.Wood], [Block.Granite, Tier.Wood], [Block.Andesite, Tier.Wood],
   [Block.Cobblestone, Tier.Wood], [Block.MossyCobblestone, Tier.Wood],
   [Block.Sandstone, Tier.Wood], [Block.Glowstone, Tier.Hand],
+  [Block.Furnace, Tier.Wood], [Block.FurnaceLit, Tier.Wood],
   [Block.Ice, Tier.Wood], [Block.PackedIce, Tier.Wood],
   [Block.CoalOre, Tier.Wood],
   [Block.IronOre, Tier.Stone], [Block.GoldOre, Tier.Iron], [Block.DiamondOre, Tier.Iron],

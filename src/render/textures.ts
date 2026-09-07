@@ -129,17 +129,18 @@ function smooth(e0: number, e1: number, x: number): number {
 // ---------------------------------------------------------------------------
 
 /** Per-texel output slots: r, g, b, alpha, height, roughness. */
-const CH = 6;
+const CH = 7;
 
 /**
  * `u`/`v` are in [0,1) across the tile; `s` is the tile resolution.
- * Writers must fill all six channels of `out` at `index`.
+ * Writers must fill all seven channels of `out` at `index`.
  */
 type MaterialFn = (u: number, v: number, s: number, out: Float32Array, index: number) => void;
 
 function write(
   out: Float32Array, i: number,
   r: number, g: number, b: number, a: number, height: number, rough: number,
+  emission = 0,
 ): void {
   out[i] = r;
   out[i + 1] = g;
@@ -147,6 +148,11 @@ function write(
   out[i + 3] = a;
   out[i + 4] = height;
   out[i + 5] = rough;
+  // Per-texel emission, for materials where only part of the tile glows — the
+  // coals inside a lit furnace, and nothing else so far. The flat
+  // `PROCEDURAL_EMISSION` constant covers whole-block emitters like glowstone;
+  // a furnace lit that way would glow through its own stone.
+  out[i + 6] = emission;
 }
 
 /** Grain shared by all stone-family materials. */
@@ -523,7 +529,60 @@ const MATERIALS: Record<TextureName, MaterialFn> = {
       mix(0.23 * t, 0.22 * t, tool),
       1, (1 - seam) * (0.45 + grain * 0.4) + tool * 0.3, mix(0.74, 0.9, seam));
   },
+
+  furnace_top: (u, v, _s, out, i) => {
+    // Cobble, with a round hole in the middle: seen from above that hole is
+    // the only thing telling a furnace from the wall it is set into.
+    const [shade] = stoneBase(u, v, 3401, 0.44);
+    const r = Math.hypot(u - 0.5, v - 0.5);
+    const hole = smooth(0.19, 0.14, r);
+    const rim = smooth(0.14, 0.2, r) * smooth(0.26, 0.2, r);
+    const t = shade * mix(1, 0.25, hole) * mix(1, 1.25, rim);
+    write(out, i, t, t * 0.99, t * 0.98, 1, (1 - hole) * shade, mix(0.9, 0.98, hole));
+  },
+
+  furnace_front: (u, v, _s, out, i) => furnaceFront(u, v, out, i, 0),
+  furnace_front_lit: (u, v, _s, out, i) => furnaceFront(u, v, out, i, 1),
 };
+
+/**
+ * The face with the opening. `fire` is 0 for a cold furnace and 1 for a lit one
+ * — the same drawing, because what changes when a furnace lights is what is
+ * inside the hole, not the stone around it.
+ */
+function furnaceFront(
+  u: number, v: number, out: Float32Array, i: number, fire: number,
+): void {
+  const [shade] = stoneBase(u, v, 3407, 0.42);
+
+  // A wide arch in the lower two thirds.
+  const inX = smooth(0.20, 0.235, u) * smooth(0.80, 0.765, u);
+  const inY = smooth(0.14, 0.175, v) * smooth(0.60, 0.55, v);
+  const arch = Math.min(inX, inY);
+
+  // Bars across the opening, so it reads as a grate rather than a doorway.
+  const bar = smooth(0.42, 0.5, Math.abs(((v * 7) % 1) - 0.5) * 2) * arch;
+
+  const emberNoise = fbm(u * 9, v * 9, 9, 3, 3413);
+  const ember = arch * (0.45 + emberNoise * 0.75) * (1 - bar * 0.7);
+
+  let r: number, g: number, b: number;
+  if (fire > 0.5) {
+    r = mix(shade, 1.25 * ember, arch);
+    g = mix(shade, 0.45 * ember, arch);
+    b = mix(shade, 0.10 * ember, arch);
+  } else {
+    // Cold: near-black, with just enough grain not to be a flat hole.
+    const dark = 0.045 + emberNoise * 0.03;
+    r = mix(shade, dark, arch);
+    g = mix(shade, dark, arch);
+    b = mix(shade, dark * 1.05, arch);
+  }
+
+  const height = (1 - arch) * shade + bar * 0.2;
+  write(out, i, r, g, b, 1, height, mix(0.9, 0.75, arch),
+    fire > 0.5 ? arch * ember * 0.55 : 0);
+}
 
 function leafMaterial(
   u: number, v: number, out: Float32Array, i: number, seed: number, holeAmount: number,
@@ -763,7 +822,10 @@ export function bakeMaterial(
     material[p * 4] = Math.round(clamp01(scratch[p * CH + 4]) * 255);
     material[p * 4 + 1] = f0;
     material[p * 4 + 2] = scattering;
-    material[p * 4 + 3] = emission;
+    // Whichever is brighter: the per-material constant or what this texel asked
+    // for. A material either glows all over or in places, never both.
+    const local = Math.round(clamp01(scratch[p * CH + 6]) * 255);
+    material[p * 4 + 3] = Math.max(emission, local);
   }
 
   // Each material function writes its height field at whatever amplitude suited

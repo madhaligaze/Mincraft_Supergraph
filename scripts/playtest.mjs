@@ -228,6 +228,21 @@ await api(() => { window.supergraph.ground(); });
 await waitFrames(6);
 const standing = await state();
 if (!standing.onGround) record('note', 'перед прыжком игрок не на земле', `inFluid ${standing.inFluid}`);
+// Headroom first. A jump measured under a canopy is a measurement of the
+// canopy, and reporting that as "the jump is broken" is how a test lies.
+const headroom = await api(() => {
+  const a = window.supergraph;
+  const p = a.player;
+  const x = Math.floor(p.position[0]);
+  const z = Math.floor(p.position[2]);
+  const feet = Math.floor(p.position[1]);
+  for (let dy = 2; dy <= 4; dy++) {
+    if (a.world.isSolidAt(x, feet + dy, z)) {
+      return { blocked: dy, name: a.blockName(a.world.getBlock(x, feet + dy, z)) };
+    }
+  }
+  return { blocked: 0, name: null };
+});
 const y0 = standing.pos[1];
 await api(() => window.supergraph.key('Space', true));
 await waitFrames(2);
@@ -239,7 +254,10 @@ for (let i = 0; i < 16; i++) {
 }
 const jump = peak - y0;
 const jumpState = await state();
-if (jump < 0.6) {
+if (jump < 0.6 && headroom.blocked > 0) {
+  record('note', 'прыжок не измерен: над головой потолок',
+    `${headroom.name} в ${headroom.blocked} блоках`);
+} else if (jump < 0.6) {
   record('bad', 'прыжок слишком низкий или его нет',
     `${jump.toFixed(2)} блока, onGround ${jumpState.onGround}, inFluid ${jumpState.inFluid}`);
 }
@@ -659,23 +677,7 @@ if (!tree) {
     return { x, y, z };
   });
   const onAnchor = await aimAt(anchor.x, anchor.y, anchor.z);
-  const holding = await api(() => {
-    const a = window.supergraph;
-    const index = a.inventory.slots.findIndex((s) => s && a.blockName(s.id) === 'crafting_table');
-    if (index < 0) return -1;
-    // Only the hotbar can be in hand; move it there if it landed in storage.
-    if (index >= 9) {
-      const target = a.inventory.slots.findIndex((s, i) => i < 9 && !s);
-      if (target >= 0) {
-        a.inventory.set(target, a.inventory.get(index));
-        a.inventory.set(index, null);
-        a.inventory.selected = target;
-        return target;
-      }
-    }
-    a.inventory.selected = index;
-    return index;
-  });
+  const holding = await api(() => window.supergraph.equip('crafting_table'));
 
   if (holding < 0) {
     record('stop', 'верстака нет в сумке, ставить нечего');
@@ -768,18 +770,7 @@ if (!tree) {
     const a = window.supergraph;
     a.fill(b.x, b.y, b.z, b.x, b.y, b.z, 1);
     a.items.clear();
-    const pick = a.itemId('wooden_pickaxe');
-    let index = a.inventory.slots.findIndex((s) => s && s.id === pick);
-    if (index >= 9) {
-      const target = a.inventory.slots.findIndex((s, i) => i < 9 && !s);
-      if (target >= 0) {
-        a.inventory.set(target, a.inventory.get(index));
-        a.inventory.set(index, null);
-        index = target;
-      }
-    }
-    if (index >= 0) a.inventory.selected = index;
-    return index;
+    return a.equip('wooden_pickaxe');
   }, bench);
   const onStone2 = await aimAt(bench.x, bench.y, bench.z);
   if (!onStone2.ok) record('note', 'не навёлся на камень с киркой', JSON.stringify(onStone2));
@@ -821,6 +812,324 @@ if (!tree) {
 await shoot('06-craft');
 flushErrors();
 
+// --- smelting ------------------------------------------------------------
+//
+// The link that decides whether the game has a second hour: iron ore is not a
+// pickaxe, and diamond ore only yields to an iron one. Without a furnace the
+// whole tool chain stops at stone.
+await act('плавка');
+
+const furnaceSpot = await api(() => {
+  const a = window.supergraph;
+  const p = a.player;
+  const x = Math.round(p.position[0]) + 10;
+  const y = Math.floor(p.position[1]);
+  const z = Math.round(p.position[2]);
+  a.fill(x - 1, y - 1, z - 1, x + 4, y + 2, z + 1, 0);
+  a.fill(x, y, z, x, y, z, 1);
+  a.items.clear();
+  return { x, y, z };
+});
+
+// Eight cobblestone make a furnace, and it goes down against the stone.
+const furnaceCrafted = await craftIn([
+  'cobblestone', 'cobblestone', 'cobblestone',
+  'cobblestone', null, 'cobblestone',
+  'cobblestone', 'cobblestone', 'cobblestone',
+], 3);
+if (!furnaceCrafted || furnaceCrafted.item !== 'furnace') {
+  record('stop', 'печь не крафтится из булыжника', JSON.stringify(furnaceCrafted));
+} else {
+  ok('печь скрафчена');
+
+  const inHand = await api(() => window.supergraph.equip('furnace'));
+
+  const onWall = await aimAt(furnaceSpot.x, furnaceSpot.y, furnaceSpot.z);
+  if (inHand < 0 || !onWall.ok) {
+    record('note', 'печь не удалось поставить: прицел или слот',
+      `${inHand} ${JSON.stringify(onWall)}`);
+  } else {
+    await api(() => window.supergraph.button(2, true));
+    await waitFrames(2);
+    await api(() => window.supergraph.button(2, false));
+    await waitFrames(2);
+
+    const at = { x: furnaceSpot.x + 1, y: furnaceSpot.y, z: furnaceSpot.z };
+    const placedFurnace = await api((f) => window.supergraph.blockName(
+      window.supergraph.world.getBlock(f.x, f.y, f.z)), at);
+
+    if (placedFurnace !== 'furnace') {
+      record('bad', 'печь не встала', `на месте ${placedFurnace}`);
+    } else {
+      ok('печь поставлена', `${at.x} ${at.y} ${at.z}`);
+
+      // Right-click opens it; the window must be the furnace one, not a grid.
+      const opened = await api((f) => {
+        const a = window.supergraph;
+        a.openFurnace(f.x, f.y, f.z);
+        const el = document.getElementById('inventory');
+        return {
+          open: el && !el.hidden,
+          furnaceShown: !document.querySelector('.inv-furnace').hidden,
+          craftHidden: document.querySelector('.inv-craft').hidden,
+        };
+      }, at);
+      if (!opened.open || !opened.furnaceShown || !opened.craftHidden) {
+        record('bad', 'окно печи открылось неправильно', JSON.stringify(opened));
+      } else {
+        ok('печь открывает своё окно, а не сетку крафта');
+      }
+
+      // Ore in, coal under, and let it burn.
+      await api((f) => {
+        window.supergraph.furnaceLoad(f.x, f.y, f.z, 'raw_iron', 'coal');
+      }, at);
+      const before = await api((f) => window.supergraph.furnaceState(f.x, f.y, f.z), at);
+      await api(() => window.supergraph.tickFurnaces(11));
+      const after = await api((f) => window.supergraph.furnaceState(f.x, f.y, f.z), at);
+
+      if (!after || !after.output || after.output.item !== 'iron_ingot') {
+        record('stop', 'печь не выплавила слиток',
+          `было ${JSON.stringify(before)}, стало ${JSON.stringify(after)}`);
+      } else {
+        ok('печь плавит руду в слиток',
+          `${after.output.count} шт. за 11 с, топлива осталось ${after.burn.toFixed(0)} с`);
+      }
+
+      const lit = await api((f) => window.supergraph.blockName(
+        window.supergraph.world.getBlock(f.x, f.y, f.z)), at);
+      if (lit !== 'furnace_lit') {
+        record('bad', 'горящая печь не отличается от холодной', `блок ${lit}`);
+      } else {
+        ok('горящая печь светится', 'блок сменился на furnace_lit');
+      }
+
+      // Fuel with nothing to smelt must not burn: that is the check that stops
+      // a furnace quietly eating a stack of coal.
+      const fuelBefore = await api((f) => {
+        const a = window.supergraph;
+        const state = a.furnaces.at(f.x, f.y, f.z);
+        state.input = null;
+        state.burn = 0;
+        state.burnTotal = 0;
+        return state.fuel ? state.fuel.count : 0;
+      }, at);
+      await api(() => window.supergraph.tickFurnaces(4));
+      // The block swap goes through `setBlock`, which refuses a column that is
+      // mid-relight — so the furnace stops being lit within a frame or two, not
+      // inside the synchronous tick that put the fire out.
+      await waitFrames(4);
+      const idle = await api((f) => window.supergraph.furnaceState(f.x, f.y, f.z), at);
+      const fuelNow = idle.fuel ? idle.fuel.count : 0;
+      if (idle.burn > 0 || fuelNow < fuelBefore) {
+        record('bad', 'печь жжёт топливо впустую',
+          `топлива ${fuelBefore} -> ${fuelNow}, горение ${idle.burn}`);
+      } else if (idle.lit) {
+        record('bad', 'потухшая печь осталась горящим блоком', JSON.stringify(idle));
+      } else {
+        ok('без сырья печь не жжёт топливо и гаснет', `топлива ${fuelNow}`);
+      }
+
+      // And breaking it gives back what was inside.
+      await api((f) => { window.supergraph.closeInventory(); window.supergraph.items.clear(); }, at);
+      const onFurnace = await aimAt(at.x, at.y, at.z);
+      if (onFurnace.ok) {
+        await api(() => {
+          const a = window.supergraph;
+          if (a.equip('stone_pickaxe') < 0) { a.give('stone_pickaxe', 1); a.equip('stone_pickaxe'); }
+        });
+        const broken = await mineAimed(80);
+        const spilled = await api(() => window.supergraph.droppedItems());
+        if (!broken || !broken.gone) {
+          record('bad', 'печь не ломается', JSON.stringify(broken));
+        } else if (!spilled.some((d) => d.item === 'iron_ingot')) {
+          record('stop', 'сломанная печь съела то, что в ней лежало',
+            JSON.stringify(spilled));
+        } else {
+          ok('сломанная печь возвращает содержимое',
+            spilled.map((d) => `${d.item} x${d.count}`).join(', '));
+        }
+      }
+    }
+  }
+}
+
+// Iron pickaxe, and the one thing only it can do.
+await api(() => { window.supergraph.give('iron_ingot', 3); window.supergraph.give('stick', 2); });
+const ironPick = await craftIn(
+  ['iron_ingot', 'iron_ingot', 'iron_ingot', null, 'stick', null, null, 'stick', null], 3);
+if (!ironPick || ironPick.item !== 'iron_pickaxe') {
+  record('stop', 'железная кирка не крафтится', JSON.stringify(ironPick));
+} else {
+  ok('железная кирка скрафчена');
+
+  const diamondSpot = await api(() => {
+    const a = window.supergraph;
+    const p = a.player;
+    const x = Math.round(p.position[0]) + 12;
+    const y = Math.floor(p.position[1]);
+    const z = Math.round(p.position[2]);
+    a.fill(x - 1, y - 1, z - 1, x + 4, y + 2, z + 1, 0);
+    a.fill(x, y, z, x, y, z, a.blockId('diamond_ore'));
+    a.items.clear();
+    return { x, y, z };
+  });
+
+  // Stone pickaxe first: it must break the ore and get nothing.
+  await api(() => {
+    const a = window.supergraph;
+    if (a.equip('stone_pickaxe') < 0) { a.give('stone_pickaxe', 1); a.equip('stone_pickaxe'); }
+    return a.inventory.selected;
+  });
+  const withStone = await aimAt(diamondSpot.x, diamondSpot.y, diamondSpot.z);
+  if (withStone.ok) {
+    const dug = await mineAimed(120);
+    const got = await api(() => window.supergraph.droppedItems());
+    if (dug && dug.gone && got.length > 0) {
+      record('bad', 'алмаз выпадает от каменной кирки',
+        `в эталоне нужна железная; выпало ${JSON.stringify(got)}`);
+    } else if (dug && dug.gone) {
+      ok('каменная кирка ломает алмазную руду впустую', `${dug.seconds.toFixed(1)} с`);
+    }
+  }
+
+  const ironInHand = await api((d) => {
+    const a = window.supergraph;
+    a.fill(d.x, d.y, d.z, d.x, d.y, d.z, a.blockId('diamond_ore'));
+    a.items.clear();
+    return a.equip('iron_pickaxe');
+  }, diamondSpot);
+  if (ironInHand < 0) record('stop', 'железная кирка не попала в руку');
+  const withIron = await aimAt(diamondSpot.x, diamondSpot.y, diamondSpot.z);
+  if (!withIron.ok) {
+    record('note', 'не навёлся на алмазную руду', JSON.stringify(withIron));
+  } else {
+    const dug = await mineAimed(120);
+    const got = await api(() => window.supergraph.droppedItems());
+    if (!dug || !dug.gone) {
+      record('bad', 'железная кирка не берёт алмазную руду', JSON.stringify(dug));
+    } else if (!got.some((d) => d.item === 'diamond')) {
+      record('stop', 'алмазная руда не даёт алмаз железной киркой', JSON.stringify(got));
+    } else {
+      ok('железная кирка даёт алмаз', `${dug.seconds.toFixed(2)} с`);
+    }
+  }
+}
+await shoot('07-smelt');
+flushErrors();
+
+// --- damage and death ----------------------------------------------------
+//
+// Until there is a way to lose, height is scenery and lava is decoration.
+await act('урон');
+
+const vitals0 = await api(() => window.supergraph.vitals());
+if (!vitals0 || vitals0.max !== 20) {
+  record('stop', 'здоровья нет вовсе', JSON.stringify(vitals0));
+} else {
+  ok('здоровье есть', `${vitals0.health} из ${vitals0.max}`);
+
+  // A twelve-block drop onto stone. The reference charges one half-heart per
+  // block past the third, so this should cost about nine.
+  // High above the terrain on purpose. Earlier versions built the shaft
+  // wherever the player happened to be standing, and by this point in the run
+  // that can be the sea floor: the pit floods, the fall lands in water, and
+  // water cancels fall damage — so the test reported a broken mechanic when
+  // what it had actually built was a swimming pool.
+  const SKY = 150;
+  const fell = await api((floor) => {
+    const a = window.supergraph;
+    const p = a.player;
+    const x = Math.round(p.position[0]);
+    const z = Math.round(p.position[2]);
+    a.fill(x - 2, floor, z - 2, x + 2, floor + 24, z + 2, 0);
+    a.fill(x - 2, floor - 1, z - 2, x + 2, floor - 1, z + 2, a.blockId('stone'));
+    a.player.flying = false;
+    a.player.health = 20;
+    a.player.dead = false;
+    a.teleport(x + 0.5, floor + 12, z + 0.5);
+    return { x, y: floor, z };
+  }, SKY);
+  let landed = null;
+  for (let i = 0; i < 60; i++) {
+    await waitFrames(1);
+    const s = await api(() => ({
+      ...window.supergraph.vitals(),
+      onGround: window.supergraph.player.onGround,
+      y: window.supergraph.player.position[1],
+    }));
+    if (s.onGround && s.y < fell.y + 1.5) { landed = s; break; }
+  }
+  if (!landed) {
+    record('note', 'падение не завершилось за отведённые кадры');
+  } else if (landed.health >= 20) {
+    record('bad', 'падение с двенадцати блоков не наносит урона',
+      `здоровье ${landed.health}, ноги в ${landed.y.toFixed(1)}`);
+  } else {
+    ok('падение наносит урон',
+      `с 12 блоков осталось ${landed.health} из 20 (в эталоне ~11)`);
+  }
+
+  // Lava is four half-hearts every half second, and it kills.
+  const inLava = await api((floor) => {
+    const a = window.supergraph;
+    const p = a.player;
+    const x = Math.round(p.position[0]) + 6;
+    const z = Math.round(p.position[2]);
+    a.fill(x - 1, floor - 1, z - 1, x + 1, floor + 3, z + 1, 0);
+    a.fill(x - 1, floor - 2, z - 1, x + 1, floor - 2, z + 1, a.blockId('stone'));
+    a.fill(x, floor - 1, z, x, floor - 1, z, a.blockId('lava'));
+    a.player.health = 20;
+    a.player.dead = false;
+    a.player.flying = false;
+    a.teleport(x + 0.5, floor - 0.6, z + 0.5);
+    return { x, y: floor, z };
+  }, SKY);
+  let burned = null;
+  for (let i = 0; i < 40; i++) {
+    await waitFrames(1);
+    const s = await api(() => window.supergraph.vitals());
+    if (s.health < 20 || s.dead) { burned = s; break; }
+  }
+  if (!burned) {
+    record('bad', 'лава не жжёт', JSON.stringify(inLava));
+  } else {
+    ok('лава наносит урон', `здоровье ${burned.health}`);
+  }
+
+  // And death: the bag spills, the panel comes up, respawn puts it back.
+  const died = await api(() => {
+    const a = window.supergraph;
+    a.player.health = 20;
+    a.player.dead = false;
+    a.items.clear();
+    a.give('cobblestone', 12);
+    a.hurt(40, 'fall');
+    return { vitals: a.vitals(), ground: a.droppedItems().length, bag: a.bag().length };
+  });
+  if (!died.vitals.dead || !died.vitals.deathPanel) {
+    record('stop', 'смерти нет: здоровье кончилось, а игра продолжается',
+      JSON.stringify(died));
+  } else {
+    ok('смерть показывает экран');
+    if (died.bag > 0 || died.ground === 0) {
+      record('bad', 'при смерти вещи не выпадают',
+        `в сумке ${died.bag}, на земле ${died.ground}`);
+    } else {
+      ok('при смерти вещи выпадают', `${died.ground} стопок на земле`);
+    }
+    await shoot('08-death');
+
+    const back = await api(() => window.supergraph.respawn());
+    if (back.dead || back.health < 20) {
+      record('stop', 'возрождение не работает', JSON.stringify(back));
+    } else {
+      ok('возрождение возвращает в мир', `здоровье ${back.health}`);
+    }
+  }
+}
+flushErrors();
+
 // --- water ---------------------------------------------------------------
 await act('вода');
 const swam = await api(() => {
@@ -848,7 +1157,7 @@ if (!swam) {
   const w = await state();
   if (!w.underwater) record('bad', 'под водой игра не считает игрока под водой');
   else ok('погружение распознано', `дыхание ${(w.breath * 100).toFixed(0)}%`);
-  await shoot('07-underwater');
+  await shoot('09-underwater');
 
   // Breath must actually drain.
   await sleep(6000);
@@ -888,7 +1197,7 @@ await api(() => {
   a.faceSun(2.6, -0.05);
 });
 await sleep(9000);
-await shoot('08-night');
+await shoot('10-night');
 flushErrors();
 
 // --- what a session costs ------------------------------------------------

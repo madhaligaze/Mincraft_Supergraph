@@ -59,6 +59,31 @@ function drawLump(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void 
   ctx.stroke();
 }
 
+/** An ingot: a flat trapezoid with a bright top face. Reads as "refined". */
+function drawIngot(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
+  const cx = s * 0.5;
+  const top = s * 0.42;
+  const bottom = s * 0.68;
+
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.24, top);
+  ctx.lineTo(cx + s * 0.24, top);
+  ctx.lineTo(cx + s * 0.30, bottom);
+  ctx.lineTo(cx - s * 0.30, bottom);
+  ctx.closePath();
+  ctx.fillStyle = rgb(def.color, 0.8);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.20, top - s * 0.10);
+  ctx.lineTo(cx + s * 0.20, top - s * 0.10);
+  ctx.lineTo(cx + s * 0.24, top);
+  ctx.lineTo(cx - s * 0.24, top);
+  ctx.closePath();
+  ctx.fillStyle = rgb(def.color, 1.15);
+  ctx.fill();
+}
+
 function drawStick(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
   ctx.save();
   ctx.translate(s * 0.5, s * 0.5);
@@ -161,6 +186,7 @@ function paint(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
   switch (def.shape) {
     case 'block': drawBlock(ctx, s, def); break;
     case 'lump': drawLump(ctx, s, def); break;
+    case 'ingot': drawIngot(ctx, s, def); break;
     case 'stick': drawStick(ctx, s, def); break;
     default: drawTool(ctx, s, def); break;
   }

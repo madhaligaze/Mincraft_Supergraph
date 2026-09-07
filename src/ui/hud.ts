@@ -30,6 +30,15 @@ export class Hud {
   private readonly breathEl: HTMLElement;
 
   private readonly heldLabelEl: HTMLElement;
+  private readonly healthEl: HTMLElement;
+  private readonly flashEl: HTMLElement;
+  private readonly deathEl: HTMLElement;
+  private readonly deathCauseEl: HTMLElement;
+
+  private hearts: HTMLElement[] = [];
+  private shownHealth = -1;
+  /** Seconds left on the red flash. */
+  private flashTimer = 0;
 
   private slots: HTMLElement[] = [];
   private activeSlot = -1;
@@ -74,8 +83,94 @@ export class Hud {
     this.heldLabelEl.hidden = true;
     this.hudEl.insertBefore(this.heldLabelEl, this.hotbarEl);
 
+    this.healthEl = document.getElementById('health')!;
+
+    // A red wash over the whole screen when something bites. Done in the DOM
+    // rather than in the composite shader on purpose: it is interface, not
+    // scene, and it costs the renderer nothing.
+    this.flashEl = document.createElement('div');
+    this.flashEl.id = 'hurt-flash';
+    document.body.appendChild(this.flashEl);
+
+    this.deathEl = document.createElement('div');
+    this.deathEl.id = 'death';
+    this.deathEl.hidden = true;
+    const deathPanel = document.createElement('div');
+    deathPanel.className = 'death-panel';
+    const title = document.createElement('h2');
+    title.textContent = 'Вы погибли';
+    this.deathCauseEl = document.createElement('p');
+    const button = document.createElement('button');
+    button.id = 'respawn';
+    button.textContent = 'Возродиться';
+    deathPanel.append(title, this.deathCauseEl, button);
+    this.deathEl.appendChild(deathPanel);
+    document.body.appendChild(this.deathEl);
+
     this.buildHotbar();
+    this.buildHearts();
     this.buildSettings();
+  }
+
+  private buildHearts(): void {
+    this.healthEl.textContent = '';
+    this.hearts = [];
+    // Ten hearts of two half-hearts each, exactly as the reference splits them.
+    for (let i = 0; i < 10; i++) {
+      const heart = document.createElement('div');
+      heart.className = 'heart';
+      this.healthEl.appendChild(heart);
+      this.hearts.push(heart);
+    }
+  }
+
+  /** Called when the player is hurt: flashes the screen. */
+  showHurt(): void {
+    this.flashTimer = 0.45;
+    this.flashEl.style.opacity = '1';
+  }
+
+  /**
+   * Paints the hearts.
+   *
+   * `health` is in half-hearts, 0..20. Half-hearts matter: the difference
+   * between one heart and half of one is the difference between surviving the
+   * next fall and not.
+   */
+  updateHealth(health: number, dt: number): void {
+    if (health !== this.shownHealth) {
+      this.shownHealth = health;
+      for (let i = 0; i < this.hearts.length; i++) {
+        const filled = health - i * 2;
+        this.hearts[i].classList.toggle('full', filled >= 2);
+        this.hearts[i].classList.toggle('half', filled === 1);
+        this.hearts[i].classList.toggle('empty', filled <= 0);
+      }
+      this.healthEl.classList.toggle('low', health <= 6);
+    }
+
+    if (this.flashTimer > 0) {
+      this.flashTimer -= dt;
+      this.flashEl.style.opacity = String(Math.max(0, this.flashTimer / 0.45) * 0.55);
+    }
+  }
+
+  /** Shows the death panel; `onRespawn` is wired once by the caller. */
+  showDeath(cause: string, onRespawn: () => void): void {
+    if (!this.deathEl.hidden) return;
+    this.deathCauseEl.textContent = cause;
+    this.deathEl.hidden = false;
+    const button = this.deathEl.querySelector('#respawn') as HTMLButtonElement;
+    button.onclick = onRespawn;
+    button.focus();
+  }
+
+  hideDeath(): void {
+    this.deathEl.hidden = true;
+  }
+
+  get deathVisible(): boolean {
+    return !this.deathEl.hidden;
   }
 
   private buildHotbar(): void {

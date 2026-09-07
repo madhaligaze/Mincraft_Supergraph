@@ -14,6 +14,7 @@ import { AudioEngine } from './audio/audio.ts';
 import { Hud, facingLabel } from './ui/hud.ts';
 import { Inventory } from './game/inventory.ts';
 import { ItemEntities } from './game/entities.ts';
+import { Furnaces } from './game/smelting.ts';
 import { dropsFor } from './game/drops.ts';
 import { itemByName, itemDef, stack, type ItemStack } from './game/items.ts';
 import { InventoryWindow } from './ui/inventory.ts';
@@ -153,6 +154,7 @@ async function boot(): Promise<void> {
   const inventory = new Inventory();
   const player = new Player(world, input, inventory);
   const items = new ItemEntities();
+  const furnaces = new Furnaces();
 
   // Icons are drawn once, on a canvas, and used in two places: the DOM slots
   // and — as a texture array — the sprites of items lying on the ground.
@@ -171,6 +173,7 @@ async function boot(): Promise<void> {
     player.pitch = resumed.pitch;
     player.hotbarIndex = resumed.hotbar;
     inventory.load(resumed.inventory);
+    furnaces.load(resumed.furnaces);
     renderer.sky.timeOfDay = resumed.time;
   }
 
@@ -193,6 +196,56 @@ async function boot(): Promise<void> {
   /** Throws a stack out in front of the player's eyes. */
   function dropIntoWorld(item: ItemStack): void {
     items.throwFrom(player.camera.position, player.camera.forward, item);
+  }
+
+  /**
+   * Dying.
+   *
+   * Everything carried is spilled where it happened, as in the reference. That
+   * is harsh, and it is also the only thing that makes a deep mine a decision
+   * rather than a corridor: what is at stake is the trip, not the character.
+   */
+  function onDeath(): void {
+    const causes: Record<string, string> = {
+      fall: 'Падение с высоты',
+      lava: 'Лава',
+      cactus: 'Кактус',
+      drown: 'Утонул',
+      crush: 'Задохнулся в блоке',
+      void: 'Бездна',
+    };
+    const cause = player.lastHurt ? causes[player.lastHurt.cause] : 'Смерть';
+
+    inventoryWindow.hide();
+    if (!input.synthetic) input.releaseLock();
+    for (let i = 0; i < inventory.slots.length; i++) {
+      const slot = inventory.get(i);
+      if (!slot) continue;
+      inventory.set(i, null);
+      items.spawn(
+        player.position[0], player.position[1] + 0.9, player.position[2], slot,
+        (Math.random() - 0.5) * 2.5, 2.2, (Math.random() - 0.5) * 2.5,
+        // Long enough that respawning next to the pile does not instantly
+        // collect it, short enough that walking back does.
+        3,
+      );
+    }
+
+    hud.showDeath(cause, () => {
+      hud.hideDeath();
+      player.revive();
+      const home = world.findSpawn();
+      player.setPosition(home.x, home.y, home.z);
+      // The spawn point is a column top, but the world may have changed since;
+      // drop onto whatever is solid there now.
+      for (let y = Math.min(home.y + 40, 190); y > 1; y--) {
+        if (world.isSolidAt(Math.floor(home.x), y - 1, Math.floor(home.z))) {
+          player.setPosition(home.x, y + 0.05, home.z);
+          break;
+        }
+      }
+      if (!input.synthetic) input.requestLock();
+    });
   }
 
   const inventoryWindow = new InventoryWindow(inventory, icons, {
@@ -348,6 +401,15 @@ async function boot(): Promise<void> {
     stats: () => ({ world: world.stats(), render: renderer.stats }),
     /** Block id -> registry name, so a test can report what it actually found. */
     blockName: (id: number) => BLOCKS[id]?.name ?? `#${id}`,
+    /**
+     * Registry name -> block id.
+     *
+     * The other direction, and the more important one: a script that writes a
+     * numeric id into `fill` is one inserted block away from building a
+     * different world than it thinks. A test asking for lava by number got
+     * flowing water, and reported that lava does not burn.
+     */
+    blockId: (name: string) => BLOCKS.find((b) => b.name === name)?.id ?? -1,
 
     // --- the game side ---
     //
@@ -371,6 +433,30 @@ async function boot(): Promise<void> {
     },
     /** Registry name -> item id. */
     itemId: (name: string) => itemByName(name),
+    /**
+     * Puts a named item in hand, moving it to the hotbar if it is in storage.
+     *
+     * A script cannot click a slot, and "find the item and select it" written
+     * out at every call site got the check `i < 9` wrong twice — which looked
+     * like a broken pickaxe rather than a test holding the wrong tool.
+     * Returns the hotbar slot, or -1.
+     */
+    equip(name: string) {
+      const id = itemByName(name);
+      if (id === 0) return -1;
+      let index = inventory.slots.findIndex((s) => s && s.id === id);
+      if (index < 0) return -1;
+      if (index >= 9) {
+        let target = inventory.slots.findIndex((s, i) => i < 9 && !s);
+        if (target < 0) target = 0;
+        const swap = inventory.get(target);
+        inventory.set(target, inventory.get(index));
+        inventory.set(index, swap);
+        index = target;
+      }
+      inventory.selected = index;
+      return index;
+    },
     /** Puts an item on the ground at a spot, for looking at it. */
     dropAt(x: number, y: number, z: number, name: string, count = 1) {
       const id = itemByName(name);
@@ -384,6 +470,26 @@ async function boot(): Promise<void> {
     })),
     /** Progress on the block being mined, 0..1, or -1 when not mining. */
     breakProgress: () => player.breaking?.progress ?? -1,
+    /** Health in half-hearts, whether the player is dead, and from what. */
+    vitals: () => ({
+      health: player.health,
+      max: player.maxHealth,
+      dead: player.dead,
+      cause: player.lastHurt?.cause ?? null,
+      deathPanel: hud.deathVisible,
+    }),
+    /** Applies damage directly, for testing the consequences of it. */
+    hurt(amount = 1, cause = 'fall') {
+      player.hurt(amount, cause as Parameters<typeof player.hurt>[1]);
+      if (player.dead && !hud.deathVisible) onDeath();
+      return player.health;
+    },
+    /** Presses the respawn button. */
+    respawn() {
+      const button = document.getElementById('respawn') as HTMLButtonElement | null;
+      button?.click();
+      return { health: player.health, dead: player.dead };
+    },
     /** Lays items into the open crafting grid by name; null clears a cell. */
     craftSet(cells: (string | null)[]) {
       for (let i = 0; i < inventoryWindow.grid.cells.length; i++) {
@@ -397,6 +503,50 @@ async function boot(): Promise<void> {
     craftResult() {
       const result = matchRecipe(inventoryWindow.grid.cells, inventoryWindow.grid.size);
       return result ? { item: itemDef(result.id).name, count: result.count } : null;
+    },
+    furnaces,
+    /**
+     * Runs the furnaces forward by `seconds`, now.
+     *
+     * The same reason `tickFluids` exists: one ingot is ten seconds of game
+     * time, and a headless browser on software rendering manages a few frames a
+     * second — so a test that waits for real frames spends two minutes proving
+     * that a furnace smelts, and gets written lenient instead of correct.
+     */
+    tickFurnaces(seconds = 1, step = 0.25) {
+      for (let t = 0; t < seconds; t += step) {
+        furnaces.update(step, (x, y, z, block) => {
+          if (world.getBlock(x, y, z) !== block) world.setBlock(x, y, z, block);
+        });
+      }
+      return furnaces.count;
+    },
+    /** Opens the furnace at these coordinates, as a right-click would. */
+    openFurnace(x: number, y: number, z: number) {
+      const block = world.getBlock(x, y, z);
+      if (block !== Block.Furnace && block !== Block.FurnaceLit) return null;
+      const state = furnaces.at(x, y, z);
+      inventoryWindow.showFurnace(state);
+      return state;
+    },
+    /** What one furnace holds, by item name, plus its two timers. */
+    furnaceState(x: number, y: number, z: number) {
+      const state = furnaces.peek(x, y, z);
+      if (!state) return null;
+      const name = (slot: { id: number; count: number } | null) =>
+        (slot ? { item: itemDef(slot.id).name, count: slot.count } : null);
+      return {
+        input: name(state.input), fuel: name(state.fuel), output: name(state.output),
+        burn: state.burn, cook: state.cook,
+        lit: world.getBlock(x, y, z) === Block.FurnaceLit,
+      };
+    },
+    /** Puts items into a furnace's slots, for setting a test up. */
+    furnaceLoad(x: number, y: number, z: number, input: string | null, fuel: string | null) {
+      const state = furnaces.at(x, y, z);
+      state.input = input ? stack(itemByName(input), 8) : null;
+      state.fuel = fuel ? stack(itemByName(fuel), 8) : null;
+      return true;
     },
     /** Opens the bag (2) or a table (3) without needing a pointer. */
     openInventory(size = 2) {
@@ -526,6 +676,8 @@ async function boot(): Promise<void> {
   /** Last serialised bag, and the version it was made from. See `tick`. */
   let savedInventory: number[] = inventory.serialize();
   let savedInventoryVersion = inventory.version;
+  let savedFurnaces: number[] = furnaces.serialize();
+  let furnaceSaveTimer = 4;
 
   /** Rolling frame times in milliseconds, for the benchmark script. */
   const frameTimes: number[] = [];
@@ -562,9 +714,10 @@ async function boot(): Promise<void> {
   });
 
   document.addEventListener('pointerlockchange', () => {
-    // Losing the pointer to the inventory window is not the player walking
-    // away from the game, and must not put up the pause overlay.
-    if (!input.locked && running && !inventoryWindow.isOpen) {
+    // Losing the pointer to the inventory window — or to the death panel — is
+    // not the player walking away from the game, and must not put up the pause
+    // overlay on top of them.
+    if (!input.locked && running && !inventoryWindow.isOpen && !hud.deathVisible) {
       overlay.hidden = false;
       playButton.textContent = 'Продолжить';
       hud.setPlaying(false);
@@ -666,11 +819,21 @@ async function boot(): Promise<void> {
           // destroyed.
           const held = inventory.held;
           items.spawnFromBlock(event.x, event.y, event.z, dropsFor(event.block, held));
+          // A broken container gives back what was inside it. Anything else is
+          // a way to lose a stack of iron by mistake.
+          if (event.block === Block.Furnace || event.block === Block.FurnaceLit) {
+            const inside = furnaces.remove(event.x, event.y, event.z);
+            if (inside.length > 0) items.spawnFromBlock(event.x, event.y, event.z, inside);
+          }
           if (inventory.damageHeld(1)) audio.dig(event.block);
         } else if (event.kind === 'place') {
           audio.place(event.block);
-        } else if (event.kind === 'use' && event.block === Block.CraftingTable) {
-          inventoryWindow.show(3, 'Верстак');
+        } else if (event.kind === 'use') {
+          if (event.block === Block.CraftingTable) {
+            inventoryWindow.show(3, 'Верстак');
+          } else if (event.block === Block.Furnace || event.block === Block.FurnaceLit) {
+            inventoryWindow.showFurnace(furnaces.at(event.x, event.y, event.z));
+          }
         }
       }
 
@@ -680,10 +843,25 @@ async function boot(): Promise<void> {
       );
       if (picked > 0) audio.pickup();
 
+      // Furnaces run whether or not anyone is watching — that is what makes
+      // leaving one loaded and going back to mining worth doing.
+      furnaces.update(dt, (x, y, z, block) => {
+        if (world.getBlock(x, y, z) === block) return;
+        world.setBlock(x, y, z, block);
+        lightRefreshTimer = 0;
+      });
+
+      if (player.lastHurt) {
+        hud.showHurt();
+        audio.hurt();
+      }
+      if (player.dead && !hud.deathVisible) onDeath();
+
       hud.setHotbarIndex(player.hotbarIndex);
       updateAudio(dt, beforeX, beforeZ);
     }
     hud.updateHotbar(dt);
+    hud.updateHealth(player.health, dt);
     inventoryWindow.refresh();
 
     renderer.sky.update(running ? dt : 0);
@@ -700,11 +878,22 @@ async function boot(): Promise<void> {
       savedInventoryVersion = inventory.version;
       savedInventory = inventory.serialize();
     }
+    // Furnaces have a burn timer, so there is no version to compare — they
+    // change every frame one of them is lit. Re-read them on a slow clock
+    // instead: losing four seconds of a burn to a crash is nothing, and
+    // serialising them sixty times a second for that is absurd.
+    furnaceSaveTimer -= dt;
+    if (furnaceSaveTimer <= 0) {
+      furnaceSaveTimer = 4;
+      const next = furnaces.serialize();
+      if (next.length > 0 || savedFurnaces.length > 0) savedFurnaces = next;
+    }
     world.recordPlayerState({
       x: player.position[0], y: player.position[1], z: player.position[2],
       yaw: player.yaw, pitch: player.pitch,
       time: renderer.sky.timeOfDay, hotbar: player.hotbarIndex,
       inventory: savedInventory,
+      furnaces: savedFurnaces,
     });
     world.updateSave(dt);
     // Fluids tick on their own clock inside; passing dt every frame is what

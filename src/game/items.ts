@@ -55,7 +55,8 @@ const TIER_DURABILITY: readonly number[] = [0, 59, 131, 250, 1561];
  * a lump is a lump whether it is coal or a diamond, and the difference the
  * player reads at hotbar size is the colour.
  */
-export type IconShape = 'block' | 'lump' | 'stick' | 'pickaxe' | 'shovel' | 'axe';
+export type IconShape =
+  'block' | 'lump' | 'ingot' | 'stick' | 'pickaxe' | 'shovel' | 'axe';
 
 export interface ItemDef {
   id: ItemId;
@@ -150,6 +151,11 @@ export const Item = {
   RawIron: item({ name: 'raw_iron', label: 'Сырое железо', shape: 'lump', color: [0.79, 0.66, 0.55] }),
   RawGold: item({ name: 'raw_gold', label: 'Сырое золото', shape: 'lump', color: [0.95, 0.76, 0.31] }),
   Diamond: item({ name: 'diamond', label: 'Алмаз', shape: 'lump', color: [0.36, 0.87, 0.87] }),
+
+  // What comes out of a furnace.
+  Charcoal: item({ name: 'charcoal', label: 'Древесный уголь', shape: 'lump', color: [0.22, 0.19, 0.17] }),
+  IronIngot: item({ name: 'iron_ingot', label: 'Железный слиток', shape: 'ingot', color: [0.86, 0.85, 0.83] }),
+  GoldIngot: item({ name: 'gold_ingot', label: 'Золотой слиток', shape: 'ingot', color: [0.98, 0.80, 0.28] }),
 
   WoodenPickaxe: tool('wooden_pickaxe', 'Деревянная кирка', ToolKind.Pickaxe, Tier.Wood, 'pickaxe', WOOD_COLOR),
   WoodenShovel: tool('wooden_shovel', 'Деревянная лопата', ToolKind.Shovel, Tier.Wood, 'shovel', WOOD_COLOR),

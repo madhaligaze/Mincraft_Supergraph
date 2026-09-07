@@ -72,6 +72,16 @@ export const enum Block {
    */
   CraftingTable,
 
+  /**
+   * A furnace, and the same furnace while it is burning.
+   *
+   * Two ids rather than a block state, for the same reason the flowing fluids
+   * are separate ids: there is no metadata, and a lit furnace has to emit light
+   * — which is a property every table in this file already indexes by id.
+   */
+  Furnace,
+  FurnaceLit,
+
   Count,
 }
 
@@ -138,6 +148,10 @@ export const TEXTURES = [
   'tall_grass', 'fern', 'flower_red', 'flower_yellow', 'flower_blue',
   'dead_bush', 'cactus_top', 'cactus_side',
   'crafting_table_top', 'crafting_table_side',
+  // The opening goes on all four sides. Facing is a block state the registry
+  // has no room for, and a furnace whose front you have to walk around to find
+  // is worse than one that faces every way.
+  'furnace_front', 'furnace_front_lit', 'furnace_top',
 ] as const;
 
 export type TextureName = (typeof TEXTURES)[number];
@@ -395,6 +409,21 @@ register(def({
   roughness: 0.72, hardness: 2.5,
 }));
 
+register(def({
+  id: Block.Furnace, name: 'furnace', label: 'Печь',
+  textures: ['furnace_front', 'furnace_top', 'furnace_top'],
+  roughness: 0.86, hardness: 3.5,
+}));
+
+register(def({
+  id: Block.FurnaceLit, name: 'furnace_lit', label: 'Печь (горит)',
+  textures: ['furnace_front_lit', 'furnace_top', 'furnace_top'],
+  roughness: 0.86, hardness: 3.5, light: 13,
+  // Never in a hotbar: the player places a furnace, and the smelting logic
+  // owns the swap to the burning one.
+  placeable: false,
+}));
+
 for (let id = 0; id < Block.Count; id++) {
   if (!DEFS[id]) throw new Error(`Блок ${id} не зарегистрирован`);
 }
@@ -475,6 +504,8 @@ const ALBEDO: Partial<Record<Block, readonly [number, number, number]>> = {
   [Block.SpruceLog]: [0.08, 0.05, 0.03],
   [Block.OakPlanks]: [0.30, 0.20, 0.11],
   [Block.CraftingTable]: [0.28, 0.19, 0.10],
+  [Block.Furnace]: [0.19, 0.19, 0.20],
+  [Block.FurnaceLit]: [0.24, 0.20, 0.16],
   [Block.OakLeaves]: [0.30, 0.30, 0.30],
   [Block.BirchLeaves]: [0.32, 0.32, 0.32],
   [Block.SpruceLeaves]: [0.26, 0.26, 0.26],

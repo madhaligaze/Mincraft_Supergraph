@@ -423,6 +423,38 @@ export class AudioEngine {
     osc.stop(now + 0.13);
   }
 
+  /**
+   * Taking damage: a short, low, falling thud.
+   *
+   * Synthesised, like the pickup blip. There is no recorded set for it in a
+   * block-sound pack, and a hurt sound has to cut through whatever else is
+   * playing — which a filtered noise burst does and a sample of gravel does not.
+   */
+  hurt(): void {
+    const ctx = this.ctx;
+    const master = this.master;
+    if (!ctx || !master) return;
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(190, now);
+    osc.frequency.exponentialRampToValueAtTime(70, now + 0.16);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 900;
+
+    const amp = ctx.createGain();
+    amp.gain.setValueAtTime(0, now);
+    amp.gain.linearRampToValueAtTime(0.2, now + 0.008);
+    amp.gain.exponentialRampToValueAtTime(0.0005, now + 0.22);
+
+    osc.connect(filter).connect(amp).connect(master);
+    osc.start(now);
+    osc.stop(now + 0.24);
+  }
+
   /** A block being placed: the same set as breaking, shorter and quieter. */
   place(block: number): void {
     if (!this.ctx) return;

@@ -16,6 +16,7 @@
 import { Inventory, CraftGrid, HOTBAR_SIZE, INVENTORY_SIZE, type Slot } from '../game/inventory.ts';
 import { matchRecipe } from '../game/recipes.ts';
 import { itemDef, maxStack, sameItem, stack, type ItemStack } from '../game/items.ts';
+import { SMELT_SECONDS, fuelSeconds, smeltResult, type FurnaceState } from '../game/smelting.ts';
 import type { IconSet } from './icons.ts';
 
 export interface InventoryCallbacks {
@@ -29,7 +30,9 @@ export interface InventoryCallbacks {
 type Target =
   | { kind: 'inventory'; index: number }
   | { kind: 'craft'; index: number }
-  | { kind: 'result' };
+  | { kind: 'result' }
+  | { kind: 'furnace'; slot: 'input' | 'fuel' }
+  | { kind: 'furnaceOut' };
 
 export class InventoryWindow {
   private readonly root: HTMLElement;
@@ -45,6 +48,14 @@ export class InventoryWindow {
   private hotbarSlots: HTMLElement[] = [];
 
   readonly grid = new CraftGrid(2);
+
+  /** The furnace this window is showing, or null when it is a crafting window. */
+  private furnace: FurnaceState | null = null;
+  private furnaceEl: HTMLElement;
+  private furnaceSlots: Record<'input' | 'fuel' | 'output', HTMLElement>;
+  private flameEl: HTMLElement;
+  private cookEl: HTMLElement;
+  private furnaceHintEl: HTMLElement;
 
   private open = false;
   private lastVersion = -1;
@@ -83,6 +94,45 @@ export class InventoryWindow {
     this.resultEl = document.createElement('div');
     this.resultEl.className = 'islot result';
     top.appendChild(this.resultEl);
+
+    // The furnace column: input above fuel, a flame between them, an arrow to
+    // the output. Laid out like the reference so it is read without reading.
+    this.furnaceEl = document.createElement('div');
+    this.furnaceEl.className = 'inv-furnace';
+    this.furnaceEl.hidden = true;
+    top.appendChild(this.furnaceEl);
+
+    const column = document.createElement('div');
+    column.className = 'furnace-column';
+    const input = document.createElement('div');
+    input.className = 'islot';
+    const flameWrap = document.createElement('div');
+    flameWrap.className = 'flame';
+    this.flameEl = document.createElement('div');
+    this.flameEl.className = 'flame-fill';
+    flameWrap.appendChild(this.flameEl);
+    const fuel = document.createElement('div');
+    fuel.className = 'islot';
+    column.append(input, flameWrap, fuel);
+
+    const cookArrow = document.createElement('div');
+    cookArrow.className = 'cook-arrow';
+    this.cookEl = document.createElement('div');
+    this.cookEl.className = 'cook-fill';
+    cookArrow.appendChild(this.cookEl);
+
+    const output = document.createElement('div');
+    output.className = 'islot result';
+
+    this.furnaceHintEl = document.createElement('div');
+    this.furnaceHintEl.className = 'furnace-hint';
+
+    this.furnaceEl.append(column, cookArrow, output, this.furnaceHintEl);
+    this.furnaceSlots = { input, fuel, output };
+
+    this.bindSlot(input, { kind: 'furnace', slot: 'input' });
+    this.bindSlot(fuel, { kind: 'furnace', slot: 'fuel' });
+    this.bindSlot(output, { kind: 'furnaceOut' });
 
     this.storageEl = document.createElement('div');
     this.storageEl.className = 'inv-grid';
@@ -180,6 +230,12 @@ export class InventoryWindow {
       return;
     }
 
+    if (target.kind === 'furnace' || target.kind === 'furnaceOut') {
+      this.clickFurnace(target, button, shift);
+      this.refresh(true);
+      return;
+    }
+
     if (target.kind === 'inventory') {
       if (shift && button === 0) this.inventory.quickMove(target.index);
       else if (button === 2) this.inventory.rightClickSlot(target.index);
@@ -232,6 +288,80 @@ export class InventoryWindow {
       this.inventory.cursor = cell;
     }
     this.refresh(true);
+  }
+
+  /**
+   * A furnace slot.
+   *
+   * The output slot is take-only: putting something into it would mean the
+   * furnace has to decide what to do with a stack it did not make, and there is
+   * no answer to that which is not surprising.
+   */
+  private clickFurnace(target: Target, button: number, shift: boolean): void {
+    const furnace = this.furnace;
+    if (!furnace) return;
+
+    if (target.kind === 'furnaceOut') {
+      const out = furnace.output;
+      if (!out) return;
+      if (shift) {
+        const left = this.inventory.add(out);
+        furnace.output = left > 0 ? stack(out.id, left, out.damage) : null;
+        return;
+      }
+      const cursor = this.inventory.cursor;
+      if (!cursor) {
+        this.inventory.cursor = out;
+        furnace.output = null;
+      } else if (sameItem(cursor, out) && cursor.count + out.count <= maxStack(out.id)) {
+        cursor.count += out.count;
+        furnace.output = null;
+      }
+      return;
+    }
+
+    const which = (target as { slot: 'input' | 'fuel' }).slot;
+    const current = furnace[which];
+
+    if (shift && button === 0 && current) {
+      const left = this.inventory.add(current);
+      furnace[which] = left > 0 ? stack(current.id, left, current.damage) : null;
+      return;
+    }
+
+    const cursor = this.inventory.cursor;
+
+    if (button === 2) {
+      if (!cursor) {
+        if (!current) return;
+        const half = Math.ceil(current.count / 2);
+        this.inventory.cursor = stack(current.id, half, current.damage);
+        current.count -= half;
+        furnace[which] = current.count > 0 ? current : null;
+        return;
+      }
+      if (!current) {
+        furnace[which] = stack(cursor.id, 1, cursor.damage);
+        cursor.count--;
+      } else if (sameItem(current, cursor) && current.count < maxStack(current.id)) {
+        current.count++;
+        cursor.count--;
+      }
+      if (cursor.count <= 0) this.inventory.cursor = null;
+      return;
+    }
+
+    if (cursor && current && sameItem(cursor, current)) {
+      const limit = maxStack(current.id);
+      const moved = Math.min(limit - current.count, cursor.count);
+      current.count += moved;
+      cursor.count -= moved;
+      if (cursor.count <= 0) this.inventory.cursor = null;
+      return;
+    }
+
+    furnace[which] = cursor;
+    this.inventory.cursor = current;
   }
 
   /**
@@ -290,6 +420,8 @@ export class InventoryWindow {
       this.grid.resize(size);
       this.buildCraft();
     }
+    this.furnace = null;
+    this.setMode('craft');
     this.titleEl.textContent = title;
     this.open = true;
     this.root.hidden = false;
@@ -297,10 +429,33 @@ export class InventoryWindow {
     this.callbacks.onVisibility(true);
   }
 
+  /** Opens onto one furnace's contents instead of a crafting grid. */
+  showFurnace(state: FurnaceState, title = 'Печь'): void {
+    this.furnace = state;
+    this.setMode('furnace');
+    this.titleEl.textContent = title;
+    this.open = true;
+    this.root.hidden = false;
+    this.refresh(true);
+    this.callbacks.onVisibility(true);
+  }
+
+  private setMode(mode: 'craft' | 'furnace'): void {
+    const craft = mode === 'craft';
+    this.craftEl.hidden = !craft;
+    this.resultEl.hidden = !craft;
+    this.furnaceEl.hidden = craft;
+    const arrow = this.root.querySelector('.inv-arrow') as HTMLElement | null;
+    if (arrow) arrow.hidden = !craft;
+  }
+
   hide(): void {
     if (!this.open) return;
     this.open = false;
     this.root.hidden = true;
+    // A furnace keeps what is in it — that is the whole point of a container —
+    // so only the crafting grid is emptied back into the bag.
+    this.furnace = null;
 
     // Nothing may stay behind in the grid or on the cursor: an item the player
     // cannot see is an item they have lost.
@@ -343,10 +498,14 @@ export class InventoryWindow {
     for (let i = 0; i < this.storageSlots.length; i++) {
       this.paint(this.storageSlots[i], this.inventory.get(HOTBAR_SIZE + i));
     }
-    for (let i = 0; i < this.craftSlots.length; i++) {
-      this.paint(this.craftSlots[i], this.grid.get(i));
+    if (this.furnace) {
+      this.paintFurnace(this.furnace);
+    } else {
+      for (let i = 0; i < this.craftSlots.length; i++) {
+        this.paint(this.craftSlots[i], this.grid.get(i));
+      }
+      this.paint(this.resultEl, matchRecipe(this.grid.cells, this.grid.size));
     }
-    this.paint(this.resultEl, matchRecipe(this.grid.cells, this.grid.size));
 
     const cursor = this.inventory.cursor;
     this.cursorEl.hidden = !cursor;
@@ -358,7 +517,42 @@ export class InventoryWindow {
       ? `c${this.inventory.cursor.id}x${this.inventory.cursor.count}`
       : 'c-';
     for (const cell of this.grid.cells) out += cell ? `|${cell.id}x${cell.count}` : '|-';
+    const f = this.furnace;
+    if (f) {
+      // The two gauges move continuously, so the furnace window is the one
+      // place that has to repaint on a timer rather than on a change; rounding
+      // to a tenth keeps that at ten repaints a second instead of sixty.
+      for (const slot of [f.input, f.fuel, f.output]) {
+        out += slot ? `|${slot.id}x${slot.count}` : '|-';
+      }
+      out += `|${Math.round(f.burn * 10)}|${Math.round(f.cook * 10)}`;
+    }
     return out;
+  }
+
+  /** The two slots, the output, and the two gauges between them. */
+  private paintFurnace(state: FurnaceState): void {
+    this.paint(this.furnaceSlots.input, state.input);
+    this.paint(this.furnaceSlots.fuel, state.fuel);
+    this.paint(this.furnaceSlots.output, state.output);
+
+    const flame = state.burnTotal > 0 ? state.burn / state.burnTotal : 0;
+    this.flameEl.style.height = `${Math.max(0, Math.min(1, flame)) * 100}%`;
+
+    const cook = Math.max(0, Math.min(1, state.cook / SMELT_SECONDS));
+    this.cookEl.style.width = `${cook * 100}%`;
+
+    // Why nothing is happening, said out loud. A furnace that sits there doing
+    // nothing with no explanation is the single most common way to lose a
+    // player to a wiki.
+    const input = state.input;
+    let hint = '';
+    if (!input) hint = 'положите, что плавить';
+    else if (!smeltResult(input.id)) hint = 'это не плавится';
+    else if (state.burn <= 0 && (!state.fuel || fuelSeconds(state.fuel.id) <= 0)) {
+      hint = 'нужно топливо: уголь, доски, бревно';
+    }
+    this.furnaceHintEl.textContent = hint;
   }
 
   /** One slot. Icon, count, and a wear bar for a tool that has been used. */

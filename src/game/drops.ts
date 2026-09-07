@@ -41,6 +41,9 @@ set(Block.OakLeaves, LEAF_DROPS);
 set(Block.BirchLeaves, LEAF_DROPS);
 set(Block.SpruceLeaves, LEAF_DROPS);
 
+// A burning furnace picked up is still just a furnace.
+set(Block.FurnaceLit, [drop(itemForBlock(Block.Furnace))]);
+
 // Nothing comes back without a silk touch that does not exist yet.
 set(Block.Glass, []);
 set(Block.Ice, []);

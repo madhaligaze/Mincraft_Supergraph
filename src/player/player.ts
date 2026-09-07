@@ -8,8 +8,10 @@
 
 import { Input } from '../core/input.ts';
 import { World } from '../world/world.ts';
-import { Block, BLOCK_FLAGS, BlockFlag, HOTBAR_SLOTS, isFluid } from '../world/blocks.ts';
-import { isWater } from '../world/fluids.ts';
+import {
+  Block, BLOCK_FLAGS, BlockFlag, HOTBAR_SLOTS, isFluid, isOpaque, isSolid,
+} from '../world/blocks.ts';
+import { isLava, isWater } from '../world/fluids.ts';
 import type { Inventory } from '../game/inventory.ts';
 import { blockOfItem } from '../game/items.ts';
 import { breakSeconds } from '../game/mining.ts';
@@ -50,7 +52,20 @@ const AIR_FRICTION = 0.6;
 const REACH = 6.0;
 
 /** Blocks that answer a right-click themselves instead of being built on. */
-const USABLE = new Set<number>([Block.CraftingTable]);
+const USABLE = new Set<number>([Block.CraftingTable, Block.Furnace, Block.FurnaceLit]);
+
+// --- damage, in half-hearts and the reference's numbers ---
+
+/** Blocks of a fall that cost nothing. */
+const FALL_SAFE_BLOCKS = 3;
+/** How often the contact sources tick. */
+const HURT_INTERVAL = 0.5;
+const LAVA_DAMAGE = 4;
+/** Per second, once the air runs out. */
+const DROWN_DAMAGE = 2;
+/** Quiet seconds before healing starts, and seconds per half-heart after. */
+const REGEN_DELAY = 5;
+const REGEN_INTERVAL = 4;
 
 /** Depth over which the water around the camera reaches its darkest, in blocks. */
 const SUBMERSION_DEPTH = 20;
@@ -79,6 +94,9 @@ export interface BlockEvent {
   y: number;
   z: number;
 }
+
+/** Where damage came from. The HUD says it, and the death message reads it. */
+export type DamageCause = 'fall' | 'lava' | 'cactus' | 'drown' | 'crush' | 'void';
 
 /** How far along the block under the crosshair is, for the HUD and the shader. */
 export interface BreakState {
@@ -125,6 +143,30 @@ export class Player {
   breath = 1;
   /** True once breath has run out and the player is being pressed to surface. */
   drowning = false;
+
+  /**
+   * Health in half-hearts, as in the reference: twenty is full.
+   *
+   * Until now the only pressure in the world was running out of air, and even
+   * that could only make the player slow — nothing could stop them. A fall from
+   * a cliff, a step into lava and a night spent underwater all cost exactly
+   * nothing, which is what made building and digging feel weightless.
+   */
+  readonly maxHealth = 20;
+  health = 20;
+  dead = false;
+
+  /** Set for one frame when damage lands, for the HUD flash and the sound. */
+  lastHurt: { amount: number; cause: DamageCause } | null = null;
+
+  /** Seconds since the last damage; regeneration waits this out. */
+  private sinceDamage = 0;
+  /** Accumulators for the sources that tick rather than fire once. */
+  private hurtTimer = 0;
+  private regenTimer = 0;
+  /** Fall speed waiting to be turned into damage, in blocks per second. */
+  private pendingFallSpeed = 0;
+  private drownTimer = 1;
 
   /**
    * The block being mined right now, or null.
@@ -207,6 +249,7 @@ export class Player {
       remaining -= step;
     }
 
+    this.updateHealth(dt);
     this.updateCamera(dt, baseFov);
   }
 
@@ -227,6 +270,108 @@ export class Player {
       const count = HOTBAR_SLOTS;
       this.hotbarIndex = (this.hotbarIndex + this.input.wheelDelta + count) % count;
     }
+  }
+
+  /**
+   * Damage, healing and dying.
+   *
+   * All five sources are the reference's, with its numbers: a fall costs one
+   * half-heart per block past the third, lava four every half second, a cactus
+   * one, suffocation one, and running out of air two a second. Regeneration
+   * stands in for eating — there is no hunger yet, so a player who gets away
+   * heals slowly instead of never.
+   */
+  private updateHealth(dt: number): void {
+    // Cleared before the dead check, not after: a corpse that keeps reporting
+    // the blow that killed it makes the HUD flash red and the hurt sound fire
+    // every frame until the player presses respawn.
+    this.lastHurt = null;
+    if (this.dead) return;
+
+    // Falling. `pendingFallSpeed` is the speed at the moment of landing, and
+    // the height it came from is what the reference charges for: v² / 2g.
+    // Water breaks a fall completely, as it does in the reference — which is
+    // the only reason jumping off anything is ever a good idea.
+    if (this.inFluid) this.pendingFallSpeed = 0;
+
+    if (this.pendingFallSpeed > 0) {
+      const distance = (this.pendingFallSpeed * this.pendingFallSpeed) / (2 * GRAVITY);
+      this.pendingFallSpeed = 0;
+      const damage = Math.floor(distance - FALL_SAFE_BLOCKS);
+      if (damage > 0) this.hurt(damage, 'fall');
+    }
+
+    const x = Math.floor(this.position[0]);
+    const z = Math.floor(this.position[2]);
+    const feetY = Math.floor(this.position[1] + 0.1);
+    const eyeY = Math.floor(this.position[1] + this.eyeHeight);
+
+    const feet = this.world.getBlock(x, feetY, z);
+    const head = this.world.getBlock(x, eyeY, z);
+
+    // The half-second sources share one clock, so standing in lava inside a
+    // cactus does not tick twice as fast as either would alone.
+    this.hurtTimer -= dt;
+    if (this.hurtTimer <= 0) {
+      this.hurtTimer = HURT_INTERVAL;
+
+      const inLava = isLava(feet) || isLava(head);
+      const touchingHarmful =
+        (BLOCK_FLAGS[feet] & BlockFlag.Harmful) !== 0 ||
+        (BLOCK_FLAGS[head] & BlockFlag.Harmful) !== 0;
+
+      if (inLava) this.hurt(LAVA_DAMAGE, 'lava');
+      else if (touchingHarmful) this.hurt(1, 'cactus');
+
+      // Suffocation: the head is inside something solid. Only when the player
+      // is not flying — a creative pass through a wall is not a death.
+      if (!this.flying && isSolid(head) && isOpaque(head)) this.hurt(1, 'crush');
+    }
+
+    // Drowning is on its own clock because the reference's rate is per second,
+    // and because the breath meter has already told the player it is coming.
+    if (this.drowning && this.headUnderwater) {
+      this.drownTimer -= dt;
+      if (this.drownTimer <= 0) {
+        this.drownTimer = 1;
+        this.hurt(DROWN_DAMAGE, 'drown');
+      }
+    } else {
+      this.drownTimer = 1;
+    }
+
+    this.sinceDamage += dt;
+    if (this.health < this.maxHealth && this.sinceDamage > REGEN_DELAY) {
+      this.regenTimer -= dt;
+      if (this.regenTimer <= 0) {
+        this.regenTimer = REGEN_INTERVAL;
+        this.health = Math.min(this.maxHealth, this.health + 1);
+      }
+    } else {
+      this.regenTimer = REGEN_INTERVAL;
+    }
+  }
+
+  /** Applies damage. Public so lava-splash and future mobs can call it. */
+  hurt(amount: number, cause: DamageCause): void {
+    if (this.dead || amount <= 0) return;
+    this.health = Math.max(0, this.health - amount);
+    this.sinceDamage = 0;
+    this.lastHurt = { amount, cause };
+    if (this.health <= 0) this.dead = true;
+  }
+
+  /** Back on your feet with a full bar. The caller decides where. */
+  revive(): void {
+    this.health = this.maxHealth;
+    this.dead = false;
+    this.breath = 1;
+    this.drowning = false;
+    this.sinceDamage = 0;
+    this.hurtTimer = HURT_INTERVAL;
+    this.pendingFallSpeed = 0;
+    this.lastFallSpeed = 0;
+    v3set(this.velocity, 0, 0, 0);
   }
 
   private updateFluidState(dt: number): void {
@@ -398,7 +543,21 @@ export class Player {
     this.moveAxis(0, dx);
     this.moveAxis(2, dz);
 
-    if (this.onGround && wasFalling < -0.1) this.lastFallSpeed = -wasFalling;
+    // The **largest** impact since the last read, not the latest.
+    //
+    // A frame is integrated in slices of at most 50 ms, and every slice after
+    // the one that landed also "lands": gravity pulls the player a hair into
+    // the floor and the resolver pushes them back out at a speed of about one
+    // block a second. Overwriting meant a twelve-block drop was recorded as
+    // that last hair — which read as "fall damage does not work" while the
+    // landing sound was quietly wrong too.
+    if (this.onGround && wasFalling < -0.1) {
+      const speed = -wasFalling;
+      if (speed > this.lastFallSpeed) this.lastFallSpeed = speed;
+      // Kept apart from `lastFallSpeed`, which the audio consumes: two readers
+      // of one value means whichever runs first silently eats the other's.
+      if (speed > this.pendingFallSpeed) this.pendingFallSpeed = speed;
+    }
 
     // Do not fall out of the world while chunks are still streaming in.
     if (this.position[1] < 1) {
@@ -518,7 +677,7 @@ export class Player {
    * something the player is doing and becomes something happening to them.
    */
   interact(dt: number): BlockEvent | null {
-    if (this.uiOpen) {
+    if (this.uiOpen || this.dead) {
       this.breaking = null;
       return null;
     }

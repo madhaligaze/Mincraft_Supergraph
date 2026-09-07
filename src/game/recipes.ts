@@ -52,8 +52,16 @@ const RECIPES: Recipe[] = [
   { pattern: ['P', 'P'], key: { P: PLANKS }, result: stack(Item.Stick, 4) },
   { pattern: ['PP', 'PP'], key: { P: PLANKS }, result: stack(TABLE, 1) },
 
+  // Eight cobblestone around an empty middle. The furnace is what turns a cave
+  // full of iron ore into iron tools, and iron tools into diamonds.
+  {
+    pattern: ['CCC', 'C C', 'CCC'], key: { C: COBBLE },
+    result: stack(itemForBlock(Block.Furnace), 1),
+  },
+
   ...toolRecipes(PLANKS, Item.WoodenPickaxe, Item.WoodenShovel, Item.WoodenAxe),
   ...toolRecipes(COBBLE, Item.StonePickaxe, Item.StoneShovel, Item.StoneAxe),
+  ...toolRecipes(Item.IronIngot, Item.IronPickaxe, Item.IronShovel, Item.IronAxe),
 
   // Back the other way, so a chest of cobblestone is not a dead end.
   { loose: [COBBLE, COBBLE, COBBLE, COBBLE], result: stack(itemForBlock(Block.Stone), 4) },
