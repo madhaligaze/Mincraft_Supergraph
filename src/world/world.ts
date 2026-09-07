@@ -910,8 +910,22 @@ export class World {
     // land first — but soon enough that walling yourself in goes dark.
     this.giTimer = Math.min(this.giTimer, 0.4);
     this.fluids.schedule(x, y, z);
+    this.onBlockChanged?.(x, y, z, previous, block);
     return true;
   }
+
+  /**
+   * Called after every edit, whoever made it.
+   *
+   * The hook the game side hangs its reactions on: sand that has to notice the
+   * ground left from under it, leaves that have to notice their tree is gone.
+   * A callback rather than a list of subscribers because there is exactly one
+   * consumer and it is the game layer, which is allowed to know about the
+   * world while the world stays ignorant of it.
+   */
+  onBlockChanged: ((
+    x: number, y: number, z: number, previous: number, block: number,
+  ) => void) | null = null;
 
   // -------------------------------------------------------------------------
   // Fluids
@@ -950,7 +964,8 @@ export class World {
     const lx = x & CHUNK_MASK;
     const lz = z & CHUNK_MASK;
     const index = columnIndex(lx, y, lz);
-    if (column.blocks[index] === block) return false;
+    const previous = column.blocks[index];
+    if (previous === block) return false;
 
     column.blocks[index] = block;
     this.save?.record(cx, cz, index, block);
@@ -963,6 +978,10 @@ export class World {
     if (lx === CHUNK_MASK) this.fluidTouched.add(chunkKey(cx + 1, cz));
     if (lz === 0) this.fluidTouched.add(chunkKey(cx, cz - 1));
     if (lz === CHUNK_MASK) this.fluidTouched.add(chunkKey(cx, cz + 1));
+    // Same notification as `setBlock`: water washing the ground out from under
+    // a sand shelf has to make it fall, and a script that builds with `fill`
+    // has to behave like a player who built the same thing by hand.
+    this.onBlockChanged?.(x, y, z, previous, block);
     return true;
   }
 

@@ -1018,6 +1018,97 @@ if (!ironPick || ironPick.item !== 'iron_pickaxe') {
 await shoot('07-smelt');
 flushErrors();
 
+// --- the world answering back --------------------------------------------
+//
+// Two things a player finds out by digging: sand falls, and a felled tree does
+// not leave its canopy hanging in the sky.
+await act('мир отвечает');
+
+const SKY_RIG = 150;
+const sandRig = await api((floor) => {
+  const a = window.supergraph;
+  const p = a.player;
+  const x = Math.round(p.position[0]);
+  const z = Math.round(p.position[2]);
+  a.fill(x - 3, floor - 4, z - 3, x + 3, floor + 8, z + 3, 0);
+  a.fill(x, floor - 4, z, x, floor - 4, z, a.blockId('stone'));
+  a.fill(x, floor, z, x, floor + 4, z, a.blockId('sand'));
+  return { x, y: floor, z };
+}, SKY_RIG);
+await api(() => window.supergraph.tickReactions(20));
+await waitFrames(2);
+const sandNow = await api((s) => {
+  const a = window.supergraph;
+  const at = (dy) => a.blockName(a.world.getBlock(s.x, s.y + dy, s.z));
+  return { above: [2, 3, 4].map(at), settled: [-3, -2, -1].map(at) };
+}, sandRig);
+if (sandNow.settled.some((n) => n !== 'sand')) {
+  record('bad', 'песок не падает', JSON.stringify(sandNow));
+} else if (sandNow.above.some((n) => n === 'sand')) {
+  record('bad', 'песок упал не весь', JSON.stringify(sandNow));
+} else {
+  ok('песок падает и укладывается на опору', sandNow.settled.join(', '));
+}
+
+// A tree built for the purpose. One found in the world is never alone: a
+// neighbour's canopy inside the same box keeps its own leaves, and the count
+// then says the mechanic half-worked.
+const treeRig = await api((floor) => {
+  const a = window.supergraph;
+  const p = a.player;
+  const x = Math.round(p.position[0]) + 12;
+  const z = Math.round(p.position[2]);
+  const LOG = a.blockId('oak_log');
+  const LEAF = a.blockId('oak_leaves');
+  a.fill(x - 6, floor - 2, z - 6, x + 6, floor + 10, z + 6, 0);
+  a.fill(x, floor, z, x, floor + 4, z, LOG);
+  for (let dy = 2; dy <= 6; dy++) {
+    const r = dy >= 5 ? 1 : 2;
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx === 0 && dz === 0 && dy <= 4) continue;
+        a.fill(x + dx, floor + dy, z + dz, x + dx, floor + dy, z + dz, LEAF);
+      }
+    }
+  }
+  return { x, y: floor, z };
+}, SKY_RIG);
+
+const countLeaves = () => api((b) => {
+  const a = window.supergraph;
+  let n = 0;
+  for (let dy = -2; dy <= 10; dy++) {
+    for (let dz = -6; dz <= 6; dz++) {
+      for (let dx = -6; dx <= 6; dx++) {
+        if (a.blockName(a.world.getBlock(b.x + dx, b.y + dy, b.z + dz)) === 'oak_leaves') n++;
+      }
+    }
+  }
+  return n;
+}, treeRig);
+
+await api(() => window.supergraph.tickReactions(4));
+const leavesBefore = await countLeaves();
+// `fill`, not five `setBlock` calls: an edit drops its column out of `Lit` for
+// the relight, and the next `setBlock` in the same tick is refused — four of
+// the five logs would have stayed standing and held the canopy up.
+await api((b) => window.supergraph.fill(b.x, b.y, b.z, b.x, b.y + 4, b.z, 0), treeRig);
+await api(() => window.supergraph.items.clear());
+await api(() => window.supergraph.tickReactions(40));
+await waitFrames(2);
+const leavesAfter = await countLeaves();
+
+if (leavesBefore < 40) {
+  record('note', 'дерево для проверки не построилось', `листвы ${leavesBefore}`);
+} else if (leavesAfter > 0) {
+  record('bad', 'листва не осыпается после вырубки',
+    `осталось ${leavesAfter} из ${leavesBefore}`);
+} else {
+  const sticks = await api(() => window.supergraph.droppedItems().length);
+  ok('листва осыпается после вырубки', `${leavesBefore} блоков, выпало ${sticks} предметов`);
+}
+flushErrors();
+
 // --- damage and death ----------------------------------------------------
 //
 // Until there is a way to lose, height is scenery and lava is decoration.

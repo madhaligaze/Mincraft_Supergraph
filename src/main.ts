@@ -15,6 +15,7 @@ import { Hud, facingLabel } from './ui/hud.ts';
 import { Inventory } from './game/inventory.ts';
 import { ItemEntities } from './game/entities.ts';
 import { Furnaces } from './game/smelting.ts';
+import { WorldReactions } from './game/worldreact.ts';
 import { dropsFor } from './game/drops.ts';
 import { itemByName, itemDef, stack, type ItemStack } from './game/items.ts';
 import { InventoryWindow } from './ui/inventory.ts';
@@ -155,6 +156,12 @@ async function boot(): Promise<void> {
   const player = new Player(world, input, inventory);
   const items = new ItemEntities();
   const furnaces = new Furnaces();
+
+  // Sand that falls and leaves that rot: the world's own answer to being dug.
+  const reactions = new WorldReactions(world, items);
+  world.onBlockChanged = (x, y, z, previous, block) => {
+    reactions.onBlockChanged(x, y, z, previous, block);
+  };
 
   // Icons are drawn once, on a canvas, and used in two places: the DOM slots
   // and — as a texture array — the sprites of items lying on the ground.
@@ -595,6 +602,15 @@ async function boot(): Promise<void> {
       for (let i = 0; i < steps; i++) world.fluids.update(0.25);
       return world.fluids.pending;
     },
+    /**
+     * Runs falling blocks and leaf decay forward, now. Same reason as
+     * `tickFluids`: these have a fixed clock, and a headless browser has no
+     * frames to spare for waiting out three seconds of it.
+     */
+    tickReactions(steps = 1) {
+      for (let i = 0; i < steps; i++) reactions.update(0.25);
+      return reactions.pending;
+    },
     /** Batched box fill, for building test rigs and structures from a script. */
     fill: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, b: number) =>
       world.fillBlocks(x0, y0, z0, x1, y1, z1, b),
@@ -897,8 +913,12 @@ async function boot(): Promise<void> {
     });
     world.updateSave(dt);
     // Fluids tick on their own clock inside; passing dt every frame is what
-    // lets them run at a fixed rate regardless of frame rate.
-    if (running) world.fluids.update(dt);
+    // lets them run at a fixed rate regardless of frame rate. Falling blocks
+    // and rotting leaves keep their own clock the same way.
+    if (running) {
+      world.fluids.update(dt);
+      reactions.update(dt);
+    }
     accumulate('world', performance.now() - mark);
 
     // Nearby emissive blocks change slowly; rescanning every frame would be

@@ -116,6 +116,8 @@ export const enum BlockFlag {
   Fluid = 1 << 6,
   /** Damages the player on contact. */
   Harmful = 1 << 7,
+  /** Falls when there is nothing under it. */
+  Gravity = 1 << 8,
 }
 
 /** Face order used everywhere: +X, -X, +Y (top), -Y (bottom), +Z, -Z. */
@@ -240,9 +242,18 @@ register(def({
   flags: SOLID_OPAQUE | BlockFlag.GrowsGrass, roughness: 0.95, hardness: 0.5,
 }));
 
-register(def({ id: Block.Sand, name: 'sand', label: 'Песок', textures: 'sand', roughness: 0.9, hardness: 0.5 }));
-register(def({ id: Block.RedSand, name: 'red_sand', label: 'Красный песок', textures: 'red_sand', roughness: 0.9, hardness: 0.5 }));
-register(def({ id: Block.Gravel, name: 'gravel', label: 'Гравий', textures: 'gravel', roughness: 0.93, hardness: 0.6 }));
+register(def({
+  id: Block.Sand, name: 'sand', label: 'Песок', textures: 'sand',
+  flags: SOLID_OPAQUE | BlockFlag.Gravity, roughness: 0.9, hardness: 0.5,
+}));
+register(def({
+  id: Block.RedSand, name: 'red_sand', label: 'Красный песок', textures: 'red_sand',
+  flags: SOLID_OPAQUE | BlockFlag.Gravity, roughness: 0.9, hardness: 0.5,
+}));
+register(def({
+  id: Block.Gravel, name: 'gravel', label: 'Гравий', textures: 'gravel',
+  flags: SOLID_OPAQUE | BlockFlag.Gravity, roughness: 0.93, hardness: 0.6,
+}));
 register(def({ id: Block.Clay, name: 'clay', label: 'Глина', textures: 'clay', roughness: 0.75, hardness: 0.6 }));
 
 register(def({
@@ -435,7 +446,11 @@ export const BLOCKS: ReadonlyArray<BlockDef> = DEFS;
 // ---------------------------------------------------------------------------
 
 export const BLOCK_RENDER = new Uint8Array(Block.Count);
-export const BLOCK_FLAGS = new Uint8Array(Block.Count);
+/**
+ * Sixteen bits, not eight: the ninth flag (`Gravity`) is 256, and in a
+ * `Uint8Array` it would have been stored as zero — silently, for every block.
+ */
+export const BLOCK_FLAGS = new Uint16Array(Block.Count);
 export const BLOCK_LIGHT = new Uint8Array(Block.Count);
 export const BLOCK_ATTENUATION = new Uint8Array(Block.Count);
 /** 6 texture layer indices per block, in FACE_* order. */
@@ -656,6 +671,7 @@ export const isPassable = (id: number): boolean => (BLOCK_FLAGS[id] & BlockFlag.
 export const isBiomeTinted = (id: number): boolean =>
   (BLOCK_FLAGS[id] & BlockFlag.BiomeTinted) !== 0;
 export const growsGrass = (id: number): boolean => (BLOCK_FLAGS[id] & BlockFlag.GrowsGrass) !== 0;
+export const hasGravity = (id: number): boolean => (BLOCK_FLAGS[id] & BlockFlag.Gravity) !== 0;
 
 /**
  * Whether the face of `self` touching `neighbour` should be emitted.
