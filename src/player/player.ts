@@ -47,6 +47,14 @@ const BREATH_REFILL_SECONDS = 3.5;
 /** How much slower an out-of-breath swimmer is. */
 const DROWNING_SPEED = 0.55;
 
+/**
+ * Largest slice of time the collision resolver may integrate at once.
+ *
+ * At walking speed a slice this long moves the player under a quarter of a
+ * block, which is far inside the thinnest thing they can collide with.
+ */
+const MAX_PHYSICS_STEP = 0.05;
+
 /** What an interaction did to the world, for the caller to react to. */
 export interface BlockEvent {
   kind: 'break' | 'place';
@@ -132,7 +140,23 @@ export class Player {
     this.sneaking = this.input.isDown('ShiftLeft') || this.input.isDown('ShiftRight');
 
     this.updateFluidState(dt);
-    this.move(dt);
+
+    // Physics in fixed slices.
+    //
+    // The step has to be capped or a long frame lets the player pass through a
+    // wall — but capping it and throwing the rest away is what the collision
+    // resolver used to do, and that turns a frame-rate drop into slow motion:
+    // at fifteen frames a second the player walked at three quarters speed, and
+    // on the "pretty" profile the target hardware sits right there. Slicing
+    // keeps the simulated time equal to the real time whatever the frame rate.
+    let remaining = dt;
+    let guard = 0;
+    while (remaining > 1e-5 && guard++ < 8) {
+      const step = Math.min(remaining, MAX_PHYSICS_STEP);
+      this.move(step);
+      remaining -= step;
+    }
+
     this.updateCamera(dt, baseFov);
   }
 
@@ -306,13 +330,16 @@ export class Player {
     this.onGround = false;
   }
 
-  /** Integrates velocity with per-axis collision resolution. */
+  /**
+   * Integrates velocity with per-axis collision resolution.
+   *
+   * `dt` is already one physics slice — see the loop in `update`. It used to
+   * clamp here instead, which silently dropped the remainder of a long frame.
+   */
   private applyMotion(dt: number): void {
-    // Clamp the step so a long frame cannot tunnel through a wall.
-    const step = Math.min(dt, 0.05);
-    const dx = this.velocity[0] * step;
-    const dy = this.velocity[1] * step;
-    const dz = this.velocity[2] * step;
+    const dx = this.velocity[0] * dt;
+    const dy = this.velocity[1] * dt;
+    const dz = this.velocity[2] * dt;
 
     const wasFalling = this.velocity[1];
     this.onGround = false;

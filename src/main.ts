@@ -123,8 +123,13 @@ async function boot(): Promise<void> {
   // Before anything streams: a column that arrives with saved edits has to be
   // patched before it is lit, and that is only possible if the edits are
   // already in memory.
+  // `?nosave` starts from the generated world every time and writes nothing
+  // back. A scripted playthrough that resumes the previous run's save wakes up
+  // inside whatever the previous run built — which is exactly what happened the
+  // first time this was tried, and it looked like the input was broken.
+  const noSave = new URLSearchParams(location.search).has('nosave');
   setProgress(0.63, 'загрузка сохранения…');
-  world.attachSave(await WorldSave.open(seed));
+  if (!noSave) world.attachSave(await WorldSave.open(seed));
 
   /** Copies the streaming and detail-level settings into the world. */
   function applyWorldSettings(): void {
@@ -215,7 +220,7 @@ async function boot(): Promise<void> {
   // Debug handle: lets the smoke test (and the console) drive the game without
   // pointer lock, which headless Chrome cannot grant.
   (window as unknown as Record<string, unknown>).supergraph = {
-    player, world, renderer, hud, audio,
+    player, world, renderer, hud, audio, input,
     teleport(x: number, y: number, z: number) { player.setPosition(x, y, z); },
     look(yaw: number, pitch: number) { player.yaw = yaw; player.pitch = pitch; },
     /** 0..1 through the day; 0.25 sunrise, 0.5 noon, 0.75 sunset. */
@@ -329,6 +334,14 @@ async function boot(): Promise<void> {
       return true;
     },
     get running() { return running; },
+    /**
+     * Seconds of simulated time since the world started running.
+     *
+     * A script cannot measure movement against wall-clock time: the frame loop
+     * clamps a long frame to a tenth of a second, so on a slow renderer the
+     * game deliberately runs behind. Speed is distance over *this*.
+     */
+    get elapsed() { return elapsed; },
     /**
      * Runs the fluid simulation forward by `steps` ticks, now.
      *
