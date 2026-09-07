@@ -28,7 +28,15 @@ const FLY_SPEED = 12.0;
 const FLY_BOOST = 34.0;
 
 const GRAVITY = 26.0;
-const JUMP_VELOCITY = 8.6;
+/**
+ * Chosen so the jump clears exactly one block and not one and a half.
+ *
+ * `v^2 / 2g` with 8.6 came to 1.42 blocks, and the playthrough measured 1.67 —
+ * which is a different game: a player who can step onto a block and a half
+ * reads terrain differently, and every ledge the generator makes stops being an
+ * obstacle. Minecraft's jump is 1.2522 blocks; `sqrt(2 * 26 * 1.2522)` is 8.07.
+ */
+const JUMP_VELOCITY = 8.07;
 const TERMINAL_VELOCITY = 58.0;
 
 const GROUND_ACCELERATION = 42.0;
