@@ -858,13 +858,16 @@ export class Mesher {
           const texLayer = BLOCK_FACE_TEX[block * 6];
 
           // Deterministic per-block offset and rotation so a field of grass
-          // does not look like a lattice.
+          // does not look like a lattice — but only for things that grow.
+          // A torch is placed, not sown: it sits in the middle of its cell, at
+          // one size, and does not move in the wind.
+          const grows = (BLOCK_FLAGS[block] & BlockFlag.Sways) !== 0;
           const h = hash3i(chunkX * CHUNK_SIZE + x, baseY + y, chunkZ * CHUNK_SIZE + z);
-          const jitterX = (((h & 15) / 15) - 0.5) * 0.4;
-          const jitterZ = ((((h >> 8) & 15) / 15) - 0.5) * 0.4;
+          const jitterX = grows ? (((h & 15) / 15) - 0.5) * 0.4 : 0;
+          const jitterZ = grows ? ((((h >> 8) & 15) / 15) - 0.5) * 0.4 : 0;
           // Below one block: a plant that fills its whole cell reads as a solid
           // sheet rather than as something growing out of the ground.
-          const scale = 0.68 + ((h >> 16) & 7) / 7 * 0.28;
+          const scale = grows ? 0.68 + ((h >> 16) & 7) / 7 * 0.28 : 0.72;
 
           const cx = (x + 0.5 + jitterX) * P;
           const cy = y * P;
@@ -875,7 +878,7 @@ export class Mesher {
           // Two diagonal quads. Wind flag is set on the upper vertices only,
           // so the base stays planted.
           const dataBottom = packData(texLayer, FACE_PY, 3, sky, bl, tint, 0);
-          const dataTop = packData(texLayer, FACE_PY, 3, sky, bl, tint, 1);
+          const dataTop = packData(texLayer, FACE_PY, 3, sky, bl, tint, grows ? 1 : 0);
 
           for (let q = 0; q < 2; q++) {
             const dx = q === 0 ? half : half;

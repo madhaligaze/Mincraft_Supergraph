@@ -81,6 +81,7 @@ export const enum Block {
    */
   Furnace,
   FurnaceLit,
+  Torch,
 
   Count,
 }
@@ -118,6 +119,13 @@ export const enum BlockFlag {
   Harmful = 1 << 7,
   /** Falls when there is nothing under it. */
   Gravity = 1 << 8,
+  /**
+   * Cross geometry that bends in the wind and is scattered inside its cell.
+   *
+   * Every plant wants this and a torch does not: a torch that sways, sits
+   * off-centre and is a random size reads as a bug, not as weather.
+   */
+  Sways = 1 << 9,
 }
 
 /** Face order used everywhere: +X, -X, +Y (top), -Y (bottom), +Z, -Z. */
@@ -154,6 +162,7 @@ export const TEXTURES = [
   // has no room for, and a furnace whose front you have to walk around to find
   // is worse than one that faces every way.
   'furnace_front', 'furnace_front_lit', 'furnace_top',
+  'torch',
 ] as const;
 
 export type TextureName = (typeof TEXTURES)[number];
@@ -348,7 +357,7 @@ register(def({
   roughness: 0.6, light: 15, lightAttenuation: 1, hardness: 1e9,
 }));
 
-const CROSS_FLAGS = BlockFlag.Passable | BlockFlag.BiomeTinted;
+const CROSS_FLAGS = BlockFlag.Passable | BlockFlag.BiomeTinted | BlockFlag.Sways;
 
 register(def({
   id: Block.TallGrass, name: 'tall_grass', label: 'Высокая трава', textures: 'tall_grass',
@@ -360,19 +369,23 @@ register(def({
 }));
 register(def({
   id: Block.FlowerRed, name: 'flower_red', label: 'Мак', textures: 'flower_red',
-  render: RenderKind.Cross, flags: BlockFlag.Passable, lightAttenuation: 0, roughness: 0.8, hardness: 0.05,
+  render: RenderKind.Cross, flags: BlockFlag.Passable | BlockFlag.Sways,
+  lightAttenuation: 0, roughness: 0.8, hardness: 0.05,
 }));
 register(def({
   id: Block.FlowerYellow, name: 'flower_yellow', label: 'Одуванчик', textures: 'flower_yellow',
-  render: RenderKind.Cross, flags: BlockFlag.Passable, lightAttenuation: 0, roughness: 0.8, hardness: 0.05,
+  render: RenderKind.Cross, flags: BlockFlag.Passable | BlockFlag.Sways,
+  lightAttenuation: 0, roughness: 0.8, hardness: 0.05,
 }));
 register(def({
   id: Block.FlowerBlue, name: 'flower_blue', label: 'Василёк', textures: 'flower_blue',
-  render: RenderKind.Cross, flags: BlockFlag.Passable, lightAttenuation: 0, roughness: 0.8, hardness: 0.05,
+  render: RenderKind.Cross, flags: BlockFlag.Passable | BlockFlag.Sways,
+  lightAttenuation: 0, roughness: 0.8, hardness: 0.05,
 }));
 register(def({
   id: Block.DeadBush, name: 'dead_bush', label: 'Сухой куст', textures: 'dead_bush',
-  render: RenderKind.Cross, flags: BlockFlag.Passable, lightAttenuation: 0, roughness: 0.95, hardness: 0.05,
+  render: RenderKind.Cross, flags: BlockFlag.Passable | BlockFlag.Sways,
+  lightAttenuation: 0, roughness: 0.95, hardness: 0.05,
 }));
 
 register(def({
@@ -433,6 +446,20 @@ register(def({
   // Never in a hotbar: the player places a furnace, and the smelting logic
   // owns the swap to the burning one.
   placeable: false,
+}));
+
+/**
+ * The reason a mine is a place you can go into.
+ *
+ * Cross geometry, like a plant, but without `Sways`: it is the only light
+ * source a player can actually make, and one that wobbled in the wind
+ * underground would be worse than no torch at all.
+ */
+register(def({
+  id: Block.Torch, name: 'torch', label: 'Факел', textures: 'torch',
+  render: RenderKind.Cross,
+  flags: BlockFlag.Passable,
+  light: 14, lightAttenuation: 0, roughness: 0.7, hardness: 0,
 }));
 
 for (let id = 0; id < Block.Count; id++) {
@@ -533,6 +560,7 @@ const ALBEDO: Partial<Record<Block, readonly [number, number, number]>> = {
   [Block.Water]: [0.02, 0.06, 0.10],
   [Block.Lava]: [0.60, 0.20, 0.04],
   [Block.Cactus]: [0.10, 0.20, 0.07],
+  [Block.Torch]: [0.75, 0.55, 0.25],
 };
 
 /** Three linear floats per block id. */
@@ -577,6 +605,7 @@ const SOUND_OVERRIDES: Partial<Record<Block, SoundFamily>> = {
   [Block.SpruceLog]: 'wood',
   [Block.OakPlanks]: 'wood',
   [Block.CraftingTable]: 'wood',
+  [Block.Torch]: 'wood',
   [Block.OakLeaves]: 'grass',
   [Block.BirchLeaves]: 'grass',
   [Block.SpruceLeaves]: 'grass',
@@ -672,6 +701,7 @@ export const isBiomeTinted = (id: number): boolean =>
   (BLOCK_FLAGS[id] & BlockFlag.BiomeTinted) !== 0;
 export const growsGrass = (id: number): boolean => (BLOCK_FLAGS[id] & BlockFlag.GrowsGrass) !== 0;
 export const hasGravity = (id: number): boolean => (BLOCK_FLAGS[id] & BlockFlag.Gravity) !== 0;
+export const sways = (id: number): boolean => (BLOCK_FLAGS[id] & BlockFlag.Sways) !== 0;
 
 /**
  * Whether the face of `self` touching `neighbour` should be emitted.

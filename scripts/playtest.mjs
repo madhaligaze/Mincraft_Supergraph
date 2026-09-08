@@ -202,22 +202,36 @@ if (Math.abs(yaw1 - yaw0) < 0.05) {
 // Standing perfectly still: the camera must not move on its own.
 await api(() => window.supergraph.player.velocity.set([0, 0, 0]));
 await sleep(1200);
+// Both the camera and the player are measured, because they are two
+// different claims. "The camera jitters" is a rendering defect; "the player
+// slid a block" is the world doing something — sand giving way underfoot, for
+// instance — and a test that cannot tell them apart blames the wrong one.
 const drift = await api(() => new Promise((resolve) => {
   const p = window.supergraph.player;
-  const start = [...p.camera.position];
-  let max = 0;
+  const startCam = [...p.camera.position];
+  const startPos = [...p.position];
+  let camera = 0;
+  let body = 0;
   let frames = 0;
   const step = () => {
-    max = Math.max(max,
-      Math.abs(p.camera.position[0] - start[0]),
-      Math.abs(p.camera.position[1] - start[1]),
-      Math.abs(p.camera.position[2] - start[2]));
-    if (++frames < 40) requestAnimationFrame(step); else resolve(max);
+    for (let i = 0; i < 3; i++) {
+      camera = Math.max(camera, Math.abs(p.camera.position[i] - startCam[i]));
+      body = Math.max(body, Math.abs(p.position[i] - startPos[i]));
+    }
+    if (++frames < 40) requestAnimationFrame(step);
+    else resolve({ camera, body, onGround: p.onGround });
   };
   requestAnimationFrame(step);
 }));
-if (drift > 0.002) record('bad', 'камера дрожит на месте', `${(drift * 1000).toFixed(1)} мм`);
-else ok('камера неподвижна на месте', `${(drift * 1000).toFixed(2)} мм`);
+if (drift.body > 0.002) {
+  record('note', 'игрок сам сдвинулся, дрожание камеры не проверено',
+    `тело ${(drift.body * 1000).toFixed(0)} мм, камера ${(drift.camera * 1000).toFixed(0)} мм`
+    + `, на земле ${drift.onGround}`);
+} else if (drift.camera > 0.002) {
+  record('bad', 'камера дрожит на месте', `${(drift.camera * 1000).toFixed(1)} мм`);
+} else {
+  ok('камера неподвижна на месте', `${(drift.camera * 1000).toFixed(2)} мм`);
+}
 flushErrors();
 
 // --- jumping -------------------------------------------------------------
@@ -244,10 +258,21 @@ const headroom = await api(() => {
   return { blocked: 0, name: null };
 });
 const y0 = standing.pos[1];
+// Held until the player is actually airborne, not for a fixed two frames.
+// The jump is level-triggered — it fires on any frame where the button is
+// down *and* the feet are on the ground — so two frames that both catch the
+// player a hair off the ground swallow the whole jump, and the test reported
+// a broken jump about one run in three.
 await api(() => window.supergraph.key('Space', true));
-await waitFrames(2);
-await api(() => window.supergraph.key('Space', false));
 let peak = y0;
+let airborne = false;
+for (let i = 0; i < 8 && !airborne; i++) {
+  await waitFrames(1);
+  const s = await state();
+  peak = Math.max(peak, s.pos[1]);
+  airborne = !s.onGround;
+}
+await api(() => window.supergraph.key('Space', false));
 for (let i = 0; i < 16; i++) {
   await waitFrames(1);
   peak = Math.max(peak, (await state()).pos[1]);
@@ -258,8 +283,24 @@ if (jump < 0.6 && headroom.blocked > 0) {
   record('note', 'прыжок не измерен: над головой потолок',
     `${headroom.name} в ${headroom.blocked} блоках`);
 } else if (jump < 0.6) {
+  // Everything the next reader will want to know, gathered on the spot:
+  // guessing at this from three words in a report cost two sessions.
+  const why = await api(() => {
+    const a = window.supergraph;
+    const p = a.player;
+    const x = Math.floor(p.position[0]);
+    const y = Math.floor(p.position[1]);
+    const z = Math.floor(p.position[2]);
+    const at = (dy) => a.blockName(a.world.getBlock(x, y + dy, z));
+    return {
+      under: at(-1), feet: at(0), head: at(1), above: at(2),
+      vy: +p.velocity[1].toFixed(2), flying: p.flying, dead: p.dead,
+      ready: a.world.isReadyAt(x, z), pending: a.tickReactions(0),
+    };
+  });
   record('bad', 'прыжок слишком низкий или его нет',
-    `${jump.toFixed(2)} блока, onGround ${jumpState.onGround}, inFluid ${jumpState.inFluid}`);
+    `${jump.toFixed(2)} блока, onGround ${jumpState.onGround}, inFluid ${jumpState.inFluid}, `
+    + JSON.stringify(why));
 }
 else if (jump > 2.0) record('bad', 'прыжок неправдоподобно высокий', `${jump.toFixed(2)} блока`);
 else ok('прыжок', `${jump.toFixed(2)} блока (в майнкрафте ~1.25)`);
@@ -377,20 +418,29 @@ if (!aimed) {
   record('bad', 'прицел ни во что не упирается, копать нечего',
     `под ногами ${view.reachBlock}, наклон ${view.pitch.toFixed(2)}`);
 } else {
-  // A single click must *not* be enough any more: mining is a held action.
-  await api(() => window.supergraph.button(0, true));
-  await waitFrames(1);
-  await api(() => window.supergraph.button(0, false));
-  await waitFrames(1);
-  const afterClick = await api((h) => ({
-    block: window.supergraph.blockName(window.supergraph.world.getBlock(h.x, h.y, h.z)),
-    progress: window.supergraph.breakProgress(),
-  }), aimed);
-  if (afterClick.block === 'air') {
-    record('bad', 'блок ломается от одного клика, без удержания',
-      `${aimed.name} исчез мгновенно; в эталоне это удержание с прогрессом`);
+  // A single click must *not* be enough — for a block that takes real time.
+  // A flower does not: it is 0.05 hard and goes in a frame in the reference
+  // too, so the game is asked how long this one should take rather than being
+  // told what the answer ought to be.
+  const expected = await api((h) => window.supergraph.breakSeconds(h.block), aimed);
+  if (expected > 0.2) {
+    await api(() => window.supergraph.button(0, true));
+    await waitFrames(1);
+    await api(() => window.supergraph.button(0, false));
+    await waitFrames(1);
+    const afterClick = await api((h) => ({
+      block: window.supergraph.blockName(window.supergraph.world.getBlock(h.x, h.y, h.z)),
+      progress: window.supergraph.breakProgress(),
+    }), aimed);
+    if (afterClick.block === 'air') {
+      record('bad', 'блок ломается от одного клика, без удержания',
+        `${aimed.name} исчез мгновенно, а должен ломаться ${expected.toFixed(2)} с`);
+    } else {
+      ok('один клик блок не ломает', `${aimed.name} на месте, прогресс сброшен`);
+    }
   } else {
-    ok('один клик блок не ломает', `${aimed.name} на месте, прогресс сброшен`);
+    ok('прицел на мгновенном блоке, проверка удержания пропущена',
+      `${aimed.name}, ${expected.toFixed(3)} с`);
   }
 
   const dug = await mineAimed();
@@ -417,7 +467,20 @@ if (!aimed) {
       if (collected) {
         ok('предмет подобран', JSON.stringify(await api(() => window.supergraph.bag())));
       } else {
-        record('bad', 'предмет не подбирается', 'игрок стоит на нём и ничего не происходит');
+        const why = await api(() => {
+          const a = window.supergraph;
+          const p = a.player;
+          const g = a.droppedItems();
+          return {
+            player: [...p.position].map((v) => +v.toFixed(2)),
+            ground: g.map((d) => ({ item: d.item, at: [+d.x.toFixed(2), +d.y.toFixed(2), +d.z.toFixed(2)] })),
+            distance: g.length > 0
+              ? +Math.hypot(g[0].x - p.position[0], g[0].y - p.position[1], g[0].z - p.position[2]).toFixed(2)
+              : -1,
+            running: a.running,
+          };
+        });
+        record('bad', 'предмет не подбирается', JSON.stringify(why));
       }
     }
   }
@@ -1106,6 +1169,77 @@ if (leavesBefore < 40) {
 } else {
   const sticks = await api(() => window.supergraph.droppedItems().length);
   ok('листва осыпается после вырубки', `${leavesBefore} блоков, выпало ${sticks} предметов`);
+}
+flushErrors();
+
+// --- light underground ---------------------------------------------------
+//
+// A mine with no light is not a hard mine, it is a black screen. Torches are
+// the only light a player can make, so this is the check that the game has a
+// second half at all.
+await act('свет');
+
+await api(() => { window.supergraph.give('coal', 4); window.supergraph.give('stick', 4); });
+const torches = await craftIn(['coal', null, 'stick', null], 2);
+if (!torches || torches.item !== 'torch') {
+  record('stop', 'факелы не крафтятся из угля и палки', JSON.stringify(torches));
+} else {
+  ok('факелы скрафчены', `${torches.count} шт. из одного угля`);
+
+  const shaft = await api((floor) => {
+    const a = window.supergraph;
+    const p = a.player;
+    const x = Math.round(p.position[0]) + 16;
+    const z = Math.round(p.position[2]);
+    // A sealed room: no sky, so any light in it came from a torch.
+    a.fill(x - 3, floor - 2, z - 3, x + 3, floor + 4, z + 3, a.blockId('stone'));
+    a.fill(x - 1, floor, z - 1, x + 1, floor + 2, z + 1, 0);
+    return { x, y: floor, z };
+  }, SKY_RIG);
+  await waitFrames(6);
+
+  const before = await api((s) => {
+    const packed = window.supergraph.world.store.getLight(s.x, s.y, s.z);
+    return { sky: packed >> 4, block: packed & 15 };
+  }, shaft);
+  if (before.sky > 0 || before.block > 0) {
+    record('note', 'комната для проверки света не запечатана', JSON.stringify(before));
+  }
+
+  await api((s) => {
+    const a = window.supergraph;
+    a.fill(s.x, s.y, s.z, s.x, s.y, s.z, a.blockId('torch'));
+  }, shaft);
+  await waitFrames(8);
+  const after = await api((s) => {
+    const a = window.supergraph;
+    const packed = a.world.store.getLight(s.x + 1, s.y, s.z);
+    return { sky: packed >> 4, block: packed & 15,
+      here: a.blockName(a.world.getBlock(s.x, s.y, s.z)) };
+  }, shaft);
+
+  if (after.here !== 'torch') {
+    record('bad', 'факел не встал', JSON.stringify(after));
+  } else if (after.block < 10) {
+    record('stop', 'факел не светит', `блочный свет рядом ${after.block} из 14`);
+  } else {
+    ok('факел освещает шахту', `было ${before.block}, стало ${after.block}`);
+  }
+
+  // And it comes back when broken — a torch you cannot pick up is a torch you
+  // stop placing.
+  const onTorch = await aimAt(shaft.x, shaft.y, shaft.z);
+  if (onTorch.ok) {
+    await api(() => window.supergraph.items.clear());
+    const dug = await mineAimed(30);
+    const got = await api(() => window.supergraph.droppedItems());
+    if (!dug || !dug.gone) record('bad', 'факел не ломается', JSON.stringify(dug));
+    else if (!got.some((d) => d.item === 'torch')) {
+      record('bad', 'сломанный факел не возвращается', JSON.stringify(got));
+    } else {
+      ok('факел ломается мгновенно и возвращается', `${dug.seconds.toFixed(2)} с`);
+    }
+  }
 }
 flushErrors();
 

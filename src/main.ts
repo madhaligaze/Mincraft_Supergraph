@@ -17,6 +17,7 @@ import { ItemEntities } from './game/entities.ts';
 import { Furnaces } from './game/smelting.ts';
 import { WorldReactions } from './game/worldreact.ts';
 import { dropsFor } from './game/drops.ts';
+import { breakSeconds } from './game/mining.ts';
 import { itemByName, itemDef, stack, type ItemStack } from './game/items.ts';
 import { InventoryWindow } from './ui/inventory.ts';
 import { buildIcons } from './ui/icons.ts';
@@ -417,6 +418,14 @@ async function boot(): Promise<void> {
      * flowing water, and reported that lava does not burn.
      */
     blockId: (name: string) => BLOCKS.find((b) => b.name === name)?.id ?? -1,
+    /**
+     * Seconds this block takes to break with what is currently in hand.
+     *
+     * So a test can ask instead of assuming. A check that "one click is not
+     * enough" is true of stone and false of a flower, and the difference is
+     * this number, not an opinion about mining.
+     */
+    breakSeconds: (block: number) => breakSeconds(block, inventory.held),
 
     // --- the game side ---
     //

@@ -1170,10 +1170,17 @@ export class World {
     // A generous iteration cap; the distance test is the real terminator.
     for (let i = 0; i < 512; i++) {
       const block = this.store.getBlock(x, y, z);
-      const passable = (BLOCK_FLAGS[block] & BlockFlag.Passable) !== 0;
       const fluid = (BLOCK_FLAGS[block] & BlockFlag.Fluid) !== 0;
 
-      if (block !== Block.Air && (!passable || (includeFluids && fluid))) {
+      // Stops at anything that is not air and not a fluid.
+      //
+      // It used to stop only at blocks that also stopped the *player*, which
+      // quietly made every walk-through block impossible to aim at: a flower,
+      // a fern, a torch. The ray went straight through to the ground behind
+      // them, so a torch could be placed and never picked up again. Fluids
+      // stay transparent to it unless asked for, because a player looking
+      // across a lake is pointing at the far shore.
+      if (block !== Block.Air && (!fluid || includeFluids)) {
         return { x, y, z, block, nx, ny, nz, distance: travelled };
       }
 

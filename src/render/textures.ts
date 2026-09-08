@@ -543,6 +543,55 @@ const MATERIALS: Record<TextureName, MaterialFn> = {
 
   furnace_front: (u, v, _s, out, i) => furnaceFront(u, v, out, i, 0),
   furnace_front_lit: (u, v, _s, out, i) => furnaceFront(u, v, out, i, 1),
+
+  /**
+   * A torch: a stick in the lower two thirds, a flame on top, nothing else.
+   *
+   * Cut out rather than drawn on a square, because it is rendered as two
+   * crossed quads and every transparent texel is what makes it read as a stick
+   * standing in the air instead of a glowing tile.
+   */
+  torch: (u, v, _s, out, i) => {
+    const stickHalf = 0.075;
+    const middle = Math.abs(u - 0.5);
+    const inStick = middle < stickHalf && v < 0.62;
+
+    // Flame: a teardrop sitting on the stick.
+    const fx = (u - 0.5) / 0.19;
+    const fy = (v - 0.72) / 0.20;
+    const flame = fx * fx + fy * fy * (fy > 0 ? 1.9 : 0.85);
+    const inFlame = flame < 1;
+
+    if (!inStick && !inFlame) {
+      write(out, i, 0, 0, 0, 0, 0, 1);
+      return;
+    }
+
+    if (inFlame) {
+      // Hot core, cooler edge; the noise keeps it from looking like a decal.
+      const flicker = fbm(u * 12, v * 12, 12, 3, 3517);
+      const core = 1 - Math.sqrt(Math.max(flame, 0));
+      const heat = clamp01(core * 1.15 + flicker * 0.22);
+      write(out, i,
+        mix(1.0, 1.6, heat),
+        mix(0.42, 1.15, heat * heat),
+        mix(0.08, 0.45, heat * heat * heat),
+        1, 0.5 + heat * 0.4, 0.55,
+        0.35 + heat * 0.5);
+      return;
+    }
+
+    const grain = fbm(u * 26, v * 9, 26, 3, 3527);
+    const round = 1 - (middle / stickHalf) * 0.45;
+    const t = (0.5 + grain * 0.3) * round;
+    // The top of the stick is charred where the flame sits on it.
+    const char = smooth(0.5, 0.62, v);
+    write(out, i,
+      mix(0.55 * t, 0.13, char),
+      mix(0.40 * t, 0.10, char),
+      mix(0.22 * t, 0.09, char),
+      1, round * (0.4 + grain * 0.3), 0.85);
+  },
 };
 
 /**
@@ -887,7 +936,7 @@ const NORMAL_STRENGTH: Partial<Record<TextureName, number>> = {
   cobblestone: 3.2, mossy_cobblestone: 3.2, gravel: 3.0, bedrock: 2.6,
   oak_log_side: 2.6, spruce_log_side: 2.6, oak_planks: 2.2, cactus_side: 2.4,
   crafting_table_top: 2.4, crafting_table_side: 2.2,
-  tall_grass: 0.4, fern: 0.4, flower_red: 0.4, flower_yellow: 0.4,
+  tall_grass: 0.4, fern: 0.4, flower_red: 0.4, flower_yellow: 0.4, torch: 0.5,
   flower_blue: 0.4, dead_bush: 0.4,
 };
 

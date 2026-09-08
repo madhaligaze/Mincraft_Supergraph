@@ -722,9 +722,16 @@ export class Player {
       const placing = this.selectedBlock;
       if (placing === Block.Air) return null;
 
-      const x = hit.x + hit.nx;
-      const y = hit.y + hit.ny;
-      const z = hit.z + hit.nz;
+      // Aiming at grass or a flower replaces it, rather than building on top
+      // of it: the crosshair is on something the world treats as scenery, and
+      // in the reference a placed block simply takes its cell.
+      const aimedAtScenery =
+        (BLOCK_FLAGS[hit.block] & BlockFlag.Passable) !== 0 &&
+        (BLOCK_FLAGS[hit.block] & BlockFlag.Fluid) === 0;
+
+      const x = aimedAtScenery ? hit.x : hit.x + hit.nx;
+      const y = aimedAtScenery ? hit.y : hit.y + hit.ny;
+      const z = aimedAtScenery ? hit.z : hit.z + hit.nz;
 
       // Refuse to place a block inside the player.
       const half = PLAYER_WIDTH * 0.5;

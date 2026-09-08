@@ -52,6 +52,17 @@ const RECIPES: Recipe[] = [
   { pattern: ['P', 'P'], key: { P: PLANKS }, result: stack(Item.Stick, 4) },
   { pattern: ['PP', 'PP'], key: { P: PLANKS }, result: stack(TABLE, 1) },
 
+  // Coal on a stick. The only light a player can make, and therefore the
+  // difference between a mine and a hole they cannot see the bottom of.
+  {
+    pattern: ['C', 'S'], key: { C: Item.Coal, S: Item.Stick },
+    result: stack(itemForBlock(Block.Torch), 4),
+  },
+  {
+    pattern: ['C', 'S'], key: { C: Item.Charcoal, S: Item.Stick },
+    result: stack(itemForBlock(Block.Torch), 4),
+  },
+
   // Eight cobblestone around an empty middle. The furnace is what turns a cave
   // full of iron ore into iron tools, and iron tools into diamonds.
   {
