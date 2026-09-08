@@ -3,6 +3,7 @@
 
 #include "lib/common.glsl"
 #include "lib/scene.glsl"
+#include "lib/cube.glsl"
 
 uniform vec3 uBlockPos;
 uniform float uInflate;
@@ -10,38 +11,11 @@ uniform float uInflate;
 out vec2 vUv;
 flat out int vFace;
 
-const vec3 FACE_N[6] = vec3[6](
-  vec3(1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0),
-  vec3(0, -1, 0), vec3(0, 0, 1), vec3(0, 0, -1)
-);
-const vec3 FACE_U[6] = vec3[6](
-  vec3(0, 0, -1), vec3(0, 0, 1), vec3(1, 0, 0),
-  vec3(1, 0, 0), vec3(1, 0, 0), vec3(-1, 0, 0)
-);
-/**
- * Chosen so that u × v equals the face normal for **every** face.
- *
- * The top and bottom rows used to be the other way round, which made their
- * winding clockwise from outside — so back-face culling threw them away and a
- * dropped block was drawn as four side faces with no lid. It reads as a flat
- * plate rather than a cube, which is exactly how the item in the player's hand
- * looked until this line was checked with a cross product instead of an eye.
- */
-const vec3 FACE_V[6] = vec3[6](
-  vec3(0, 1, 0), vec3(0, 1, 0), vec3(0, 0, -1),
-  vec3(0, 0, 1), vec3(0, 1, 0), vec3(0, 1, 0)
-);
-const vec2 CORNERS[6] = vec2[6](
-  vec2(0, 0), vec2(1, 0), vec2(1, 1),
-  vec2(0, 0), vec2(1, 1), vec2(0, 1)
-);
-
 void main() {
-  int face = gl_VertexID / 6;
-  vec2 corner = CORNERS[gl_VertexID % 6];
-
-  vec3 local = FACE_N[face] * 0.5 + FACE_U[face] * (corner.x - 0.5) +
-    FACE_V[face] * (corner.y - 0.5);
+  vec3 normal;
+  vec2 corner;
+  int face;
+  vec3 local = cubeVertex(gl_VertexID, normal, corner, face);
 
   vec3 world = uBlockPos + 0.5 + local * (1.0 + uInflate);
 

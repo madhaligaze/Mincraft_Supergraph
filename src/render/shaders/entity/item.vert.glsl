@@ -10,6 +10,7 @@
 
 #include "lib/common.glsl"
 #include "lib/scene.glsl"
+#include "lib/cube.glsl"
 
 /** xyz = world position of the item's centre, w = spin in radians. */
 layout(location = 0) in vec4 iPosSpin;
@@ -36,37 +37,6 @@ flat out vec3 vNormal;
 flat out float vLayer;
 flat out vec2 vLight;
 
-/** Faces in the engine's usual order: +X, -X, +Y, -Y, +Z, -Z. */
-const vec3 FACE_N[6] = vec3[6](
-  vec3(1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0),
-  vec3(0, -1, 0), vec3(0, 0, 1), vec3(0, 0, -1)
-);
-
-/** u × v = n for every face, so the quad winds counter-clockwise from outside. */
-const vec3 FACE_U[6] = vec3[6](
-  vec3(0, 0, -1), vec3(0, 0, 1), vec3(1, 0, 0),
-  vec3(1, 0, 0), vec3(1, 0, 0), vec3(-1, 0, 0)
-);
-/**
- * Chosen so that u × v equals the face normal for **every** face.
- *
- * The top and bottom rows used to be the other way round, which made their
- * winding clockwise from outside — so back-face culling threw them away and a
- * dropped block was drawn as four side faces with no lid. It reads as a flat
- * plate rather than a cube, which is exactly how the item in the player's hand
- * looked until this line was checked with a cross product instead of an eye.
- */
-const vec3 FACE_V[6] = vec3[6](
-  vec3(0, 1, 0), vec3(0, 1, 0), vec3(0, 0, -1),
-  vec3(0, 0, 1), vec3(0, 1, 0), vec3(0, 1, 0)
-);
-
-/** Two triangles as six corners of the unit square. */
-const vec2 CORNERS[6] = vec2[6](
-  vec2(0, 0), vec2(1, 0), vec2(1, 1),
-  vec2(0, 0), vec2(1, 1), vec2(0, 1)
-);
-
 void main() {
   vTint = iTintScale.rgb;
   vLight = iLayers.zw;
@@ -84,22 +54,18 @@ void main() {
     vec3 up = vec3(uView[0][1], uView[1][1], uView[2][1]);
     vec3 normal = normalize(cross(right, up));
 
-    vec2 corner = CORNERS[gl_VertexID] - 0.5;
+    vec2 corner = CUBE_CORNERS[gl_VertexID] - 0.5;
     float scale = iTintScale.w * 1.55;
     world = iPosSpin.xyz + (right * corner.x + up * corner.y) * scale;
 
-    vUv = vec2(CORNERS[gl_VertexID].x, 1.0 - CORNERS[gl_VertexID].y);
+    vUv = vec2(CUBE_CORNERS[gl_VertexID].x, 1.0 - CUBE_CORNERS[gl_VertexID].y);
     vNormal = normal;
     vLayer = iLayers.y;
   } else {
-    int face = gl_VertexID / 6;
-    vec2 corner = CORNERS[gl_VertexID % 6];
-
-    vec3 n = FACE_N[face];
-    vec3 u = FACE_U[face];
-    vec3 v = FACE_V[face];
-
-    vec3 local = (n * 0.5 + u * (corner.x - 0.5) + v * (corner.y - 0.5)) * iTintScale.w;
+    vec3 n;
+    vec2 corner;
+    int face;
+    vec3 local = cubeVertex(gl_VertexID, n, corner, face) * iTintScale.w;
 
     // Tilt first, spin second, and the order is the whole trick.
     //

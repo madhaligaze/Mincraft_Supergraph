@@ -246,6 +246,47 @@ export class ItemEntities {
     }
   }
 
+  // --- persistence ---------------------------------------------------------
+
+  /**
+   * Flat records: position, item, count, damage, age.
+   *
+   * Age is kept because the five-minute lifetime is part of what an item on the
+   * ground *is*: reloading a world should not turn a pile someone abandoned an
+   * hour ago into a fresh one.
+   */
+  serialize(): number[] {
+    const out: number[] = [];
+    for (const e of this.list) {
+      out.push(
+        Math.round(e.x * 100) / 100,
+        Math.round(e.y * 100) / 100,
+        Math.round(e.z * 100) / 100,
+        e.item.id, e.item.count, e.item.damage,
+        Math.round(e.age),
+      );
+    }
+    return out;
+  }
+
+  load(data: readonly number[] | undefined): void {
+    this.clear();
+    if (!data) return;
+    const STRIDE = 7;
+    for (let i = 0; i + STRIDE <= data.length; i += STRIDE) {
+      if (data[i + 3] <= 0 || data[i + 4] <= 0) continue;
+      const entity = this.spawn(
+        data[i], data[i + 1], data[i + 2],
+        { id: data[i + 3], count: data[i + 4], damage: data[i + 5] },
+        0, 0, 0,
+        // A moment's grace on load, so items lying where the player logged out
+        // are not swept up before the first frame is drawn.
+        0.5,
+      );
+      if (entity) entity.age = data[i + 6];
+    }
+  }
+
   /**
    * Folds neighbouring identical stacks into one.
    *

@@ -1,11 +1,12 @@
 /**
  * Checks that the world survives a reload.
  *
- * Places a block, flushes the save, reloads the page from scratch and looks for
- * the block again. This is the one property that cannot be verified by reading
- * the code: it depends on the browser's storage, on the edits being in memory
- * before the first column is generated, and on them being replayed at the one
- * moment when nothing has read the terrain yet.
+ * Places a block, fills a chest, drops items on the floor, takes damage, flushes
+ * the save, reloads the page from scratch and looks for all of it again. This is
+ * the one property that cannot be verified by reading the code: it depends on
+ * the browser's storage, on the edits being in memory before the first column is
+ * generated, and on them being replayed at the one moment when nothing has read
+ * the terrain yet.
  *
  * Usage: node scripts/savetest.mjs [url]
  */
@@ -66,14 +67,39 @@ const built = await page.evaluate(async () => {
   api.teleport(x + 12.5, y + 1.05, z - 7.5);
   api.look(1.234, -0.321);
   api.setTime(0.61);
+
+  // Everything else a session accumulates: what is carried, what is on the
+  // floor, what is in a chest, and how badly hurt the player is. Each of these
+  // was added to the save at a different time, and each of them was once
+  // silently missing from it.
+  api.give('diamond', 3);
+  api.give('iron_ingot', 5);
+  api.items.clear();
+  api.dropAt(x + 12.5, y + 1.2, z - 7.5, 'coal', 4);
+  api.player.health = 13;
+  api.player.hunger = 11;
+
+  // `fill`, not `setBlock`: an edit drops its column out of `Lit` for the
+  // relight and the next `setBlock` in the same tick is refused, so the three
+  // glowstone blocks above would have eaten this one.
+  const chestAt = { x: x + 1, y: y + 4, z };
+  api.fill(chestAt.x, chestAt.y, chestAt.z, chestAt.x, chestAt.y, chestAt.z,
+    api.blockId('chest'));
+  const chest = api.chests.at(chestAt.x, chestAt.y, chestAt.z);
+  chest[0] = { id: api.itemId('gold_ingot'), count: 6, damage: 0 };
+
   // The player's own record is written by the frame loop, and a software-
   // rendered frame here takes the better part of a second: give it a few.
   await new Promise((r) => setTimeout(r, 3000));
-  await api.world.flushSave();
+  await api.save();
   const p = api.player.position;
   return {
     x, y, z, placed, edits: api.world.savedEdits,
     at: [p[0], p[1], p[2]], yaw: api.player.yaw,
+    chestAt,
+    carried: { diamond: api.have('diamond'), iron: api.have('iron_ingot') },
+    ground: api.droppedItems().length,
+    health: api.player.health, hunger: api.player.hunger,
   };
 });
 
@@ -84,7 +110,7 @@ await page.reload({ waitUntil: 'domcontentloaded', timeout: 120000 });
 await ready();
 await new Promise((r) => setTimeout(r, 20000));
 
-const found = await page.evaluate(async ({ x, y, z, placed }) => {
+const found = await page.evaluate(async ({ x, y, z, placed, chestAt }) => {
   const api = window.supergraph;
   const p = api.player.position;
   const resumed = { at: [p[0], p[1], p[2]], yaw: api.player.yaw };
@@ -98,7 +124,14 @@ const found = await page.evaluate(async ({ x, y, z, placed }) => {
 
   const blocks = [];
   for (const bx of placed) blocks.push(api.world.getBlock(bx, y + 3, z));
-  return { blocks, edits: api.world.savedEdits, resumed };
+  return {
+    blocks, edits: api.world.savedEdits, resumed,
+    carried: { diamond: api.have('diamond'), iron: api.have('iron_ingot') },
+    ground: api.droppedItems().map((d) => `${d.item}x${d.count}`),
+    health: api.player.health, hunger: api.player.hunger,
+    chest: api.chestState(chestAt.x, chestAt.y, chestAt.z),
+    chestBlock: api.blockName(api.world.getBlock(chestAt.x, chestAt.y, chestAt.z)),
+  };
 }, built);
 
 console.log(`после перезагрузки: блоки ${found.blocks.join(', ')}, правок загружено: ${found.edits}`);
@@ -107,6 +140,9 @@ const moved = Math.hypot(
 );
 console.log(`игрок продолжил с ${found.resumed.at.map((v) => v.toFixed(1)).join(', ')} ` +
   `(отклонение от сохранённого ${moved.toFixed(2)} блока, поворот ${found.resumed.yaw.toFixed(3)})`);
+console.log(`сумка: алмазов ${found.carried.diamond}, слитков ${found.carried.iron}; ` +
+  `на земле ${found.ground.join(', ') || '—'}; сундук ${JSON.stringify(found.chest)}`);
+console.log(`здоровье ${found.health}, голод ${found.hunger}`);
 
 let status = 0;
 if (built.placed.length === 0) {

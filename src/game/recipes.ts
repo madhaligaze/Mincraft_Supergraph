@@ -77,6 +77,13 @@ const RECIPES: Recipe[] = [
     result: stack(itemForBlock(Block.Torch), 4),
   },
 
+  // Three ingots in a V. The bucket is what turns water from scenery into a
+  // material you carry.
+  {
+    pattern: ['I I', ' I '], key: { I: Item.IronIngot },
+    result: stack(Item.Bucket, 1),
+  },
+
   // Eight planks around an empty middle: the same shape as the furnace, which
   // is how the reference teaches the shape once and reuses it.
   {

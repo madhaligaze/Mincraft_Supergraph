@@ -190,6 +190,7 @@ async function boot(): Promise<void> {
     // makes every dangerous situation escapable by reloading.
     if (typeof resumed.health === 'number') player.health = Math.max(1, resumed.health);
     if (typeof resumed.hunger === 'number') player.hunger = resumed.hunger;
+    items.load(resumed.items);
     renderer.sky.timeOfDay = resumed.time;
   }
 
@@ -471,6 +472,12 @@ async function boot(): Promise<void> {
     },
     /** Registry name -> item id. */
     itemId: (name: string) => itemByName(name),
+    /** Writes everything down now, as closing the tab would. */
+    async save() {
+      snapshotState(true);
+      await world.flushSave();
+      return true;
+    },
     /** The instance the held item was built from, for looking at the numbers. */
     get heldInstance() { return frame.heldItem ? [...frame.heldItem] : null; },
     /**
@@ -770,6 +777,7 @@ async function boot(): Promise<void> {
   let savedInventoryVersion = inventory.version;
   let savedFurnaces: number[] = furnaces.serialize();
   let savedChests: number[] = chests.serialize();
+  let savedItems: number[] = items.serialize();
   let furnaceSaveTimer = 4;
 
   /** Rolling frame times in milliseconds, for the benchmark script. */
@@ -787,6 +795,45 @@ async function boot(): Promise<void> {
     cpu[key] = cpu[key] * 0.9 + ms * 0.1;
   };
 
+  /**
+   * Copies the world's mutable state into the save record.
+   *
+   * Two clocks, and the difference between them is what a crash costs. The bag
+   * is compared by version and copied the moment it changes; furnaces, chests
+   * and dropped items have no version — they move every frame — so they are
+   * re-read every four seconds.
+   *
+   * `full` forces the slow half. The tab going away is exactly the moment that
+   * matters: without it `flushSave` writes the snapshot from up to four seconds
+   * ago, and everything dropped since is gone. That is how a scripted test
+   * caught it — drop three stacks, flush, reload, find nothing.
+   */
+  function snapshotState(full: boolean): void {
+    if (inventory.version !== savedInventoryVersion) {
+      savedInventoryVersion = inventory.version;
+      savedInventory = inventory.serialize();
+    }
+    if (full) {
+      const nextFurnaces = furnaces.serialize();
+      if (nextFurnaces.length > 0 || savedFurnaces.length > 0) savedFurnaces = nextFurnaces;
+      const nextChests = chests.serialize();
+      if (nextChests.length > 0 || savedChests.length > 0) savedChests = nextChests;
+      const nextItems = items.serialize();
+      if (nextItems.length > 0 || savedItems.length > 0) savedItems = nextItems;
+    }
+    world.recordPlayerState({
+      x: player.position[0], y: player.position[1], z: player.position[2],
+      yaw: player.yaw, pitch: player.pitch,
+      time: renderer.sky.timeOfDay, hotbar: player.hotbarIndex,
+      inventory: savedInventory,
+      furnaces: savedFurnaces,
+      chests: savedChests,
+      health: player.health,
+      hunger: player.hunger,
+      items: savedItems,
+    });
+  }
+
   playButton.addEventListener('click', () => {
     overlay.hidden = true;
     hud.setPlaying(true);
@@ -801,9 +848,14 @@ async function boot(): Promise<void> {
   // The two moments a browser gives to write something down: the tab going
   // away for good, and the tab going into the background — which on a phone is
   // the same thing, because it may never come back.
-  window.addEventListener('pagehide', () => { void world.flushSave(); });
+  window.addEventListener('pagehide', () => {
+    snapshotState(true);
+    void world.flushSave();
+  });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') void world.flushSave();
+    if (document.visibilityState !== 'hidden') return;
+    snapshotState(true);
+    void world.flushSave();
   });
 
   document.addEventListener('pointerlockchange', () => {
@@ -974,36 +1026,9 @@ async function boot(): Promise<void> {
     world.update(player.position[0], player.position[2], world.usingWorkers ? 1 : 5);
     world.refreshAtlases();
     world.updateIndirectLight(player.position[0], player.position[2], dt);
-    // The bag is only serialised when it changed; the same array is handed over
-    // on every other frame so the save layer can tell by reference alone.
-    if (inventory.version !== savedInventoryVersion) {
-      savedInventoryVersion = inventory.version;
-      savedInventory = inventory.serialize();
-    }
-    // Furnaces have a burn timer, so there is no version to compare — they
-    // change every frame one of them is lit. Re-read them on a slow clock
-    // instead: losing four seconds of a burn to a crash is nothing, and
-    // serialising them sixty times a second for that is absurd.
     furnaceSaveTimer -= dt;
-    if (furnaceSaveTimer <= 0) {
-      furnaceSaveTimer = 4;
-      const next = furnaces.serialize();
-      if (next.length > 0 || savedFurnaces.length > 0) savedFurnaces = next;
-      // Chests have no timer, but they are edited through a window rather than
-      // through the inventory's version counter, so they ride the same clock.
-      const nextChests = chests.serialize();
-      if (nextChests.length > 0 || savedChests.length > 0) savedChests = nextChests;
-    }
-    world.recordPlayerState({
-      x: player.position[0], y: player.position[1], z: player.position[2],
-      yaw: player.yaw, pitch: player.pitch,
-      time: renderer.sky.timeOfDay, hotbar: player.hotbarIndex,
-      inventory: savedInventory,
-      furnaces: savedFurnaces,
-      chests: savedChests,
-      health: player.health,
-      hunger: player.hunger,
-    });
+    snapshotState(furnaceSaveTimer <= 0);
+    if (furnaceSaveTimer <= 0) furnaceSaveTimer = 4;
     world.updateSave(dt);
     // Fluids tick on their own clock inside; passing dt every frame is what
     // lets them run at a fixed rate regardless of frame rate. Falling blocks

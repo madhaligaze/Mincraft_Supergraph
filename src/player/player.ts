@@ -11,9 +11,12 @@ import { World } from '../world/world.ts';
 import {
   Block, BLOCK_FLAGS, BlockFlag, HOTBAR_SLOTS, isFluid, isOpaque, isSolid,
 } from '../world/blocks.ts';
+import { FLUID_LEVEL, FLUID_SOURCE, FLUID_KIND } from '../world/blocks.ts';
 import { isLava, isWater } from '../world/fluids.ts';
 import type { Inventory } from '../game/inventory.ts';
-import { blockOfItem, foodValue } from '../game/items.ts';
+import {
+  Item, blockOfItem, bucketHolds, foodValue, isBucket, stack,
+} from '../game/items.ts';
 import { breakSeconds } from '../game/mining.ts';
 import { WORLD_HEIGHT } from '../world/constants.ts';
 import {
@@ -579,7 +582,16 @@ export class Player {
       this.velocity[2] *= scale;
     }
 
-    // Vertical.
+    // Vertical. Nothing falls through a world that has not arrived: while the
+    // column underfoot is still streaming, `isSolidAt` says "no" for terrain
+    // that is merely absent, and gravity would bury the player in it the
+    // moment it lands.
+    if (!this.groundLoaded()) {
+      this.velocity[1] = 0;
+      this.applyMotion(dt);
+      return;
+    }
+
     if (this.inFluid) {
       this.velocity[1] -= GRAVITY * 0.28 * dt;
       if (input.isDown('Space')) this.velocity[1] += 22 * drowningFactor * dt;
@@ -676,6 +688,22 @@ export class Player {
         this.velocity[1] = 0;
       }
     }
+  }
+
+  /**
+   * Is there ground to stand on, or is the column still on its way?
+   *
+   * `isSolidAt` answers "no" for a column that has not arrived, which is the
+   * same answer it gives for open air — so a player standing on terrain that
+   * gets unloaded for a moment falls, and when the column comes back they are
+   * inside it. That is how the playthrough kept reporting a jump of exactly
+   * zero blocks with the player's feet in dirt and their head in a grass
+   * block: not a jump bug, a fall through a world that was not there yet.
+   */
+  private groundLoaded(): boolean {
+    return this.world.isReadyAt(
+      Math.floor(this.position[0]), Math.floor(this.position[2]),
+    );
   }
 
   private moveAxis(axis: number, amount: number): void {
@@ -810,6 +838,14 @@ export class Player {
     }
     this.eating = 0;
 
+    // The bucket needs its own ray, because the ordinary one is blind to
+    // fluids on purpose: a player looking across a lake is pointing at the far
+    // shore, not at the water.
+    if (held && isBucket(held.id) && this.input.wasButtonPressed(2)) {
+      const event = this.useBucket(held.id);
+      if (event) return event;
+    }
+
     const hit = this.pick();
 
     if (this.input.isButtonDown(0) && hit) {
@@ -897,6 +933,57 @@ export class Player {
   /** Walk-cycle phase and amount, so the hand can bob with the camera. */
   get handBob(): { phase: number; amount: number } {
     return { phase: this.bobPhase, amount: this.bobAmount };
+  }
+
+  /**
+   * Filling and emptying a bucket.
+   *
+   * Only a **source** fills it, as in the reference: scooping a flow would let
+   * a player multiply water out of a stream, and the fluid simulation is built
+   * on sources being the only thing that lasts.
+   */
+  private useBucket(id: number): BlockEvent | null {
+    const c = this.camera;
+    const hit = this.world.raycast(
+      c.position[0], c.position[1], c.position[2],
+      c.forward[0], c.forward[1], c.forward[2],
+      REACH, true,
+    );
+    if (!hit) return null;
+
+    const carried = bucketHolds(id);
+
+    if (carried === Block.Air) {
+      // Empty: scoop, if the crosshair is on a source.
+      if (FLUID_LEVEL[hit.block] !== 0) return null;
+      if (!this.world.setBlock(hit.x, hit.y, hit.z, Block.Air)) return null;
+      const filled = FLUID_KIND[hit.block] === 2 ? Item.LavaBucket : Item.WaterBucket;
+      this.inventory.consumeHeld(1);
+      const left = this.inventory.add(stack(filled, 1));
+      if (left > 0) this.inventory.set(this.inventory.selected, stack(filled, 1));
+      this.startSwing();
+      return { kind: 'use', block: hit.block, x: hit.x, y: hit.y, z: hit.z };
+    }
+
+    // Full: pour into the cell the ray stopped in if that cell can hold it,
+    // otherwise into the one in front of the face.
+    const intoHit = hit.block === Block.Air ||
+      (BLOCK_FLAGS[hit.block] & BlockFlag.Passable) !== 0;
+    const x = intoHit ? hit.x : hit.x + hit.nx;
+    const y = intoHit ? hit.y : hit.y + hit.ny;
+    const z = intoHit ? hit.z : hit.z + hit.nz;
+
+    const target = this.world.getBlock(x, y, z);
+    const replaceable = target === Block.Air ||
+      (BLOCK_FLAGS[target] & BlockFlag.Passable) !== 0;
+    if (!replaceable) return null;
+    if (!this.world.setBlock(x, y, z, FLUID_SOURCE[FLUID_KIND[carried]])) return null;
+
+    this.inventory.consumeHeld(1);
+    const left = this.inventory.add(stack(Item.Bucket, 1));
+    if (left > 0) this.inventory.set(this.inventory.selected, stack(Item.Bucket, 1));
+    this.startSwing();
+    return { kind: 'place', block: carried, x, y, z };
   }
 
   /** Impact speed of the last landing, consumed by the HUD/audio. */

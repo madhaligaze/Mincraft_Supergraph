@@ -57,7 +57,7 @@ const TIER_DURABILITY: readonly number[] = [0, 59, 131, 250, 1561];
  */
 export type IconShape =
   'block' | 'lump' | 'ingot' | 'stick' | 'pickaxe' | 'shovel' | 'axe'
-  | 'helmet' | 'chestplate' | 'leggings' | 'boots' | 'apple';
+  | 'helmet' | 'chestplate' | 'leggings' | 'boots' | 'apple' | 'bucket';
 
 /** Which body slot a piece of armour goes in, or `None` for everything else. */
 export const enum ArmourSlot {
@@ -96,6 +96,14 @@ export interface ItemDef {
   defense: number;
   /** Hunger points this restores when eaten, or 0 for anything inedible. */
   food: number;
+  /**
+   * What this bucket holds, as a block id, or `Block.Air` for an empty one.
+   *
+   * A separate field rather than three unrelated items, because the two things
+   * the game asks are "can I scoop with this" and "what comes out" — and both
+   * are answered by one lookup.
+   */
+  holds: Block;
 }
 
 /** Linear reflectance to something a screen and an eye agree on. */
@@ -119,6 +127,7 @@ function blockItem(block: Block): ItemDef {
     armour: ArmourSlot.None,
     defense: 0,
     food: 0,
+    holds: Block.Air,
     shape: 'block',
     color: [
       toSrgb(BLOCK_ALBEDO[block * 3]),
@@ -153,6 +162,7 @@ function item(d: Partial<ItemDef> & { name: string; label: string; shape: IconSh
     armour: ArmourSlot.None,
     defense: 0,
     food: 0,
+    holds: Block.Air,
     color: [0.7, 0.7, 0.7],
     ...d,
   };
@@ -242,6 +252,26 @@ export const Item = {
   IronShovel: tool('iron_shovel', 'Железная лопата', ToolKind.Shovel, Tier.Iron, 'shovel', IRON_COLOR),
   IronAxe: tool('iron_axe', 'Железный топор', ToolKind.Axe, Tier.Iron, 'axe', IRON_COLOR),
 
+  /**
+   * The bucket, and the two things it can be full of.
+   *
+   * Three items rather than one with a state, because there is no item
+   * metadata — the same reason the flowing fluids are separate block ids. The
+   * `holds` field is what ties them together.
+   */
+  Bucket: item({
+    name: 'bucket', label: 'Ведро', shape: 'bucket', stack: 16,
+    color: [0.72, 0.72, 0.74],
+  }),
+  WaterBucket: item({
+    name: 'water_bucket', label: 'Ведро воды', shape: 'bucket', stack: 1,
+    color: [0.24, 0.45, 0.85], holds: Block.Water,
+  }),
+  LavaBucket: item({
+    name: 'lava_bucket', label: 'Ведро лавы', shape: 'bucket', stack: 1,
+    color: [0.95, 0.42, 0.10], holds: Block.Lava,
+  }),
+
   Iron: armourSet('iron', 'Железный', IRON_COLOR, [2, 6, 5, 2], [165, 240, 225, 195]),
   Diamond_: armourSet('diamond', 'Алмазный', [0.44, 0.88, 0.86], [3, 8, 6, 3], [363, 528, 495, 429]),
 } as const;
@@ -273,6 +303,12 @@ export const armourSlotOf = (id: ItemId): ArmourSlot =>
 
 /** Hunger points this restores, or 0 if it is not food. */
 export const foodValue = (id: ItemId): number => DEFS[id]?.food ?? 0;
+
+/** True for a bucket, full or empty. */
+export const isBucket = (id: ItemId): boolean => DEFS[id]?.shape === 'bucket';
+
+/** What a bucket holds, or `Block.Air`. */
+export const bucketHolds = (id: ItemId): Block => DEFS[id]?.holds ?? Block.Air;
 
 /** One stack in one slot. `damage` counts uses spent, and is 0 for anything but a tool. */
 export interface ItemStack {

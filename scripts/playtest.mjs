@@ -1564,6 +1564,108 @@ if (!vitals0 || vitals0.max !== 20) {
 }
 flushErrors();
 
+// --- bucket --------------------------------------------------------------
+//
+// The item that turns water from scenery into a material. Also the one place
+// where "only a source counts" has to be true, or a stream becomes an infinite
+// water generator.
+await act('ведро');
+
+await api(() => { window.supergraph.give('iron_ingot', 3); });
+const bucket = await craftIn([
+  'iron_ingot', null, 'iron_ingot',
+  null, 'iron_ingot', null,
+  null, null, null,
+], 3);
+if (!bucket || bucket.item !== 'bucket') {
+  record('stop', 'ведро не крафтится из трёх слитков', JSON.stringify(bucket));
+} else {
+  ok('ведро скрафчено');
+
+  // The source sits in a walled pit, looked at from straight above. Left in the
+  // open it flows into the camera's own cell, the ray stops on a *flow*, and a
+  // flow correctly refuses to fill a bucket — the rig drowns itself.
+  const pit = await api((floor) => {
+    const a = window.supergraph;
+    const p = a.player;
+    const x = Math.round(p.position[0]) + 26;
+    const z = Math.round(p.position[2]);
+    const STONE = a.blockId('stone');
+    a.fill(x - 3, floor - 2, z - 3, x + 3, floor + 4, z + 3, 0);
+    a.fill(x - 3, floor - 2, z - 3, x + 3, floor - 1, z + 3, STONE);
+    a.fill(x, floor - 1, z, x, floor - 1, z, a.blockId('water'));
+    a.player.flying = true;
+    a.equip('bucket');
+    a.teleport(x + 0.5, floor + 1.4, z + 0.5);
+    a.look(0, -Math.PI / 2 + 0.02);
+    return { x, y: floor - 1, z };
+  }, SKY_RIG);
+  await waitFrames(6);
+
+  for (let i = 0; i < 6; i++) {
+    await api(() => window.supergraph.button(2, true));
+    await waitFrames(2);
+    await api(() => window.supergraph.button(2, false));
+    await waitFrames(2);
+    if (await api(() => window.supergraph.have('water_bucket') > 0)) break;
+  }
+  const scooped = await api((r) => ({
+    at: window.supergraph.blockName(window.supergraph.world.getBlock(r.x, r.y, r.z)),
+    full: window.supergraph.have('water_bucket'),
+    empty: window.supergraph.have('bucket'),
+  }), pit);
+
+  if (scooped.full === 0) {
+    record('stop', 'ведро не набирается из источника', JSON.stringify(scooped));
+  } else if (scooped.at !== 'air') {
+    record('bad', 'вода набралась, но источник остался на месте',
+      `в яме ${scooped.at} — воду можно размножать`);
+  } else {
+    ok('ведро набирается из источника', 'источник исчезает');
+  }
+
+  await api(() => window.supergraph.equip('water_bucket'));
+  await waitFrames(2);
+  for (let i = 0; i < 6; i++) {
+    await api(() => window.supergraph.button(2, true));
+    await waitFrames(2);
+    await api(() => window.supergraph.button(2, false));
+    await waitFrames(2);
+    if (await api(() => window.supergraph.have('bucket') > 0)) break;
+  }
+  const poured = await api((r) => ({
+    at: window.supergraph.blockName(window.supergraph.world.getBlock(r.x, r.y, r.z)),
+    empty: window.supergraph.have('bucket'),
+    full: window.supergraph.have('water_bucket'),
+  }), pit);
+  if (poured.at !== 'water' || poured.empty === 0) {
+    record('stop', 'ведро не выливается', JSON.stringify(poured));
+  } else {
+    ok('ведро выливается и пустеет', `в яме ${poured.at}`);
+  }
+
+  // And a flow must refuse: otherwise a stream is an infinite water source.
+  const fromFlow = await api((r) => {
+    const a = window.supergraph;
+    a.fill(r.x, r.y, r.z, r.x, r.y, r.z, a.blockId('water_flow_3'));
+    a.equip('bucket');
+    return a.blockName(a.world.getBlock(r.x, r.y, r.z));
+  }, pit);
+  await waitFrames(3);
+  await api(() => window.supergraph.button(2, true));
+  await waitFrames(2);
+  await api(() => window.supergraph.button(2, false));
+  await waitFrames(2);
+  const filledFromFlow = await api(() => window.supergraph.have('water_bucket'));
+  if (filledFromFlow > 0) {
+    record('bad', 'ведро набирается из течения, а не только из источника',
+      `в яме было ${fromFlow} — воду можно размножать`);
+  } else {
+    ok('из течения ведро не набирается', fromFlow);
+  }
+}
+flushErrors();
+
 // --- armour --------------------------------------------------------------
 //
 // The point of iron. Without it a diamond mine is exactly as survivable as a

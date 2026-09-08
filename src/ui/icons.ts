@@ -271,6 +271,36 @@ function drawApple(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void
   ctx.fill();
 }
 
+/**
+ * A bucket: a tapered pail with a handle.
+ *
+ * The colour carries what is in it — grey empty, blue for water, orange for
+ * lava — because at slot size the contents are the only thing that could be
+ * read anyway.
+ */
+function drawBucket(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
+  ctx.strokeStyle = 'rgba(150, 152, 158, 1)';
+  ctx.lineWidth = Math.max(1, s * 0.055);
+  ctx.beginPath();
+  ctx.arc(s * 0.5, s * 0.40, s * 0.20, Math.PI, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(s * 0.28, s * 0.38);
+  ctx.lineTo(s * 0.72, s * 0.38);
+  ctx.lineTo(s * 0.64, s * 0.78);
+  ctx.lineTo(s * 0.36, s * 0.78);
+  ctx.closePath();
+  ctx.fillStyle = rgb(def.color, 0.95);
+  ctx.fill();
+  ctx.strokeStyle = rgb(def.color, 0.6);
+  ctx.stroke();
+
+  // The rim catches the light; without it the pail is a flat trapezoid.
+  ctx.fillStyle = rgb(def.color, 1.4);
+  ctx.fillRect(s * 0.28, s * 0.36, s * 0.44, s * 0.05);
+}
+
 function paint(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
   ctx.clearRect(0, 0, s, s);
   switch (def.shape) {
@@ -279,6 +309,7 @@ function paint(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
     case 'ingot': drawIngot(ctx, s, def); break;
     case 'stick': drawStick(ctx, s, def); break;
     case 'apple': drawApple(ctx, s, def); break;
+    case 'bucket': drawBucket(ctx, s, def); break;
     case 'helmet':
     case 'chestplate':
     case 'leggings':

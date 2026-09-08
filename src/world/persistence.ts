@@ -53,6 +53,14 @@ export interface SavedState {
    */
   health?: number;
   hunger?: number;
+  /**
+   * Items lying on the ground, as `[x, y, z, item, count, damage, age]`.
+   *
+   * Capped by the entity list itself at 256, so this is a few kilobytes at
+   * worst — and without it everything a player throws down before closing the
+   * tab is gone, which makes "put it on the floor for a second" a mistake.
+   */
+  items?: number[];
 }
 
 const DB_NAME = 'supergraph';
@@ -162,7 +170,8 @@ export class WorldSave {
       Math.abs(prev.z - next.z) < 0.5 && Math.abs(prev.time - next.time) < 0.004 &&
       prev.hotbar === next.hotbar && prev.inventory === next.inventory &&
       prev.furnaces === next.furnaces && prev.chests === next.chests &&
-      prev.health === next.health && prev.hunger === next.hunger) return;
+      prev.health === next.health && prev.hunger === next.hunger &&
+      prev.items === next.items) return;
     this.playerState = next;
     this.stateDirty = true;
   }
