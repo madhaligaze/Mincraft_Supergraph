@@ -18,6 +18,7 @@ import { matchRecipe } from '../game/recipes.ts';
 import { itemDef, maxStack, sameItem, stack, type ItemStack } from '../game/items.ts';
 import { SMELT_SECONDS, fuelSeconds, smeltResult, type FurnaceState } from '../game/smelting.ts';
 import { Chests, CHEST_SIZE } from '../game/chests.ts';
+import { ARMOUR_SLOTS, ArmourSlot, armourSlotOf } from '../game/items.ts';
 import type { IconSet } from './icons.ts';
 
 export interface InventoryCallbacks {
@@ -34,7 +35,8 @@ type Target =
   | { kind: 'result' }
   | { kind: 'furnace'; slot: 'input' | 'fuel' }
   | { kind: 'furnaceOut' }
-  | { kind: 'chest'; index: number };
+  | { kind: 'chest'; index: number }
+  | { kind: 'armour'; index: number };
 
 export class InventoryWindow {
   private readonly root: HTMLElement;
@@ -46,6 +48,8 @@ export class InventoryWindow {
   private readonly titleEl: HTMLElement;
 
   private craftSlots: HTMLElement[] = [];
+  private armourSlots: HTMLElement[] = [];
+  private armourEl: HTMLElement;
   private storageSlots: HTMLElement[] = [];
   private hotbarSlots: HTMLElement[] = [];
 
@@ -88,6 +92,18 @@ export class InventoryWindow {
     const top = document.createElement('div');
     top.className = 'inv-top';
     panel.appendChild(top);
+
+    // Worn armour, to the left of the crafting grid — the reference's place
+    // for it, and the reason nobody has to be told what those four slots are.
+    this.armourEl = document.createElement('div');
+    this.armourEl.className = 'inv-armour';
+    top.appendChild(this.armourEl);
+    for (let i = 0; i < ARMOUR_SLOTS; i++) {
+      const slot = this.makeSlot({ kind: 'armour', index: i });
+      slot.classList.add('armour');
+      this.armourEl.appendChild(slot);
+      this.armourSlots.push(slot);
+    }
 
     this.craftEl = document.createElement('div');
     this.craftEl.className = 'inv-craft';
@@ -262,6 +278,12 @@ export class InventoryWindow {
       return;
     }
 
+    if (target.kind === 'armour') {
+      this.clickArmour(target.index, shift);
+      this.refresh(true);
+      return;
+    }
+
     if (target.kind === 'inventory') {
       if (shift && button === 0 && this.chest) {
         // With a chest open, shift-click means "into the chest" — moving a
@@ -273,7 +295,17 @@ export class InventoryWindow {
           this.inventory.set(target.index,
             left > 0 ? stack(slot.id, left, slot.damage) : null);
         }
-      } else if (shift && button === 0) this.inventory.quickMove(target.index);
+      } else if (shift && button === 0) {
+        // A piece of armour goes on rather than across: shift-clicking a
+        // helmet into the other half of the bag is not what anybody means.
+        const slot = this.inventory.get(target.index);
+        const where = slot ? armourSlotOf(slot.id) : ArmourSlot.None;
+        if (slot && where !== ArmourSlot.None && !this.inventory.armour[where]) {
+          this.inventory.set(target.index, this.inventory.equipArmour(slot));
+        } else {
+          this.inventory.quickMove(target.index);
+        }
+      }
       else if (button === 2) this.inventory.rightClickSlot(target.index);
       else this.inventory.clickSlot(target.index);
       this.refresh(true);
@@ -324,6 +356,27 @@ export class InventoryWindow {
       this.inventory.cursor = cell;
     }
     this.refresh(true);
+  }
+
+  /**
+   * An armour slot. Only the right kind of item goes in, and nothing stacks —
+   * which makes it the one slot in the window with no merge case.
+   */
+  private clickArmour(index: number, shift: boolean): void {
+    const worn = this.inventory.armour[index] ?? null;
+
+    if (shift) {
+      if (!worn) return;
+      const left = this.inventory.add(worn);
+      this.inventory.setArmour(index, left > 0 ? worn : null);
+      return;
+    }
+
+    const cursor = this.inventory.cursor;
+    if (cursor && armourSlotOf(cursor.id) !== index) return;
+
+    this.inventory.setArmour(index, cursor);
+    this.inventory.cursor = worn;
   }
 
   /**
@@ -611,6 +664,10 @@ export class InventoryWindow {
         this.paint(this.craftSlots[i], this.grid.get(i));
       }
       this.paint(this.resultEl, matchRecipe(this.grid.cells, this.grid.size));
+    }
+
+    for (let i = 0; i < this.armourSlots.length; i++) {
+      this.paint(this.armourSlots[i], this.inventory.armour[i] ?? null);
     }
 
     const cursor = this.inventory.cursor;

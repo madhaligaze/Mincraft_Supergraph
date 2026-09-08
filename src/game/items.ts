@@ -56,7 +56,20 @@ const TIER_DURABILITY: readonly number[] = [0, 59, 131, 250, 1561];
  * player reads at hotbar size is the colour.
  */
 export type IconShape =
-  'block' | 'lump' | 'ingot' | 'stick' | 'pickaxe' | 'shovel' | 'axe';
+  'block' | 'lump' | 'ingot' | 'stick' | 'pickaxe' | 'shovel' | 'axe'
+  | 'helmet' | 'chestplate' | 'leggings' | 'boots' | 'apple';
+
+/** Which body slot a piece of armour goes in, or `None` for everything else. */
+export const enum ArmourSlot {
+  None = -1,
+  Head = 0,
+  Chest = 1,
+  Legs = 2,
+  Feet = 3,
+}
+
+/** How many armour slots there are; the inventory keeps an array this long. */
+export const ARMOUR_SLOTS = 4;
 
 export interface ItemDef {
   id: ItemId;
@@ -74,6 +87,15 @@ export interface ItemDef {
   shape: IconShape;
   /** sRGB 0..1, for the icon and for the dropped item's tint. */
   color: readonly [number, number, number];
+  /** Where this is worn, or `ArmourSlot.None`. */
+  armour: ArmourSlot;
+  /**
+   * Armour points, as in the reference: each one is four percent off incoming
+   * damage, and a full iron set is fifteen of them.
+   */
+  defense: number;
+  /** Hunger points this restores when eaten, or 0 for anything inedible. */
+  food: number;
 }
 
 /** Linear reflectance to something a screen and an eye agree on. */
@@ -94,6 +116,9 @@ function blockItem(block: Block): ItemDef {
     tool: ToolKind.None,
     tier: Tier.Hand,
     durability: 0,
+    armour: ArmourSlot.None,
+    defense: 0,
+    food: 0,
     shape: 'block',
     color: [
       toSrgb(BLOCK_ALBEDO[block * 3]),
@@ -125,6 +150,9 @@ function item(d: Partial<ItemDef> & { name: string; label: string; shape: IconSh
     tool: ToolKind.None,
     tier: Tier.Hand,
     durability: 0,
+    armour: ArmourSlot.None,
+    defense: 0,
+    food: 0,
     color: [0.7, 0.7, 0.7],
     ...d,
   };
@@ -141,6 +169,42 @@ function tool(
   });
 }
 
+/**
+ * One set of armour: four pieces, the reference's defence points and
+ * durabilities.
+ *
+ * Leather is missing because leather comes from cows and there are no mobs, so
+ * the ladder starts at iron — which is also the point at which armour starts
+ * being worth the iron.
+ */
+function armourSet(
+  prefix: string, label: string, color: readonly [number, number, number],
+  defense: readonly [number, number, number, number],
+  durability: readonly [number, number, number, number],
+): Record<'helmet' | 'chestplate' | 'leggings' | 'boots', ItemId> {
+  const pieces = [
+    ['helmet', 'шлем', ArmourSlot.Head, 'helmet'],
+    ['chestplate', 'нагрудник', ArmourSlot.Chest, 'chestplate'],
+    ['leggings', 'поножи', ArmourSlot.Legs, 'leggings'],
+    ['boots', 'ботинки', ArmourSlot.Feet, 'boots'],
+  ] as const;
+
+  const out = {} as Record<'helmet' | 'chestplate' | 'leggings' | 'boots', ItemId>;
+  for (const [name, ru, slot, shape] of pieces) {
+    out[name] = item({
+      name: `${prefix}_${name}`,
+      label: `${label} ${ru}`,
+      shape,
+      color,
+      stack: 1,
+      armour: slot,
+      defense: defense[slot],
+      durability: durability[slot],
+    });
+  }
+  return out;
+}
+
 const WOOD_COLOR = [0.68, 0.51, 0.30] as const;
 const STONE_COLOR = [0.55, 0.55, 0.57] as const;
 const IRON_COLOR = [0.82, 0.80, 0.78] as const;
@@ -153,6 +217,15 @@ export const Item = {
   Diamond: item({ name: 'diamond', label: 'Алмаз', shape: 'lump', color: [0.36, 0.87, 0.87] }),
 
   // What comes out of a furnace.
+  /**
+   * The only food in the world.
+   *
+   * It comes off oak leaves, because that is the one food source the reference
+   * has that needs neither a farm nor an animal — and there are no animals.
+   * Four points, the reference's number.
+   */
+  Apple: item({ name: 'apple', label: 'Яблоко', shape: 'apple', color: [0.82, 0.14, 0.12], food: 4 }),
+
   Charcoal: item({ name: 'charcoal', label: 'Древесный уголь', shape: 'lump', color: [0.22, 0.19, 0.17] }),
   IronIngot: item({ name: 'iron_ingot', label: 'Железный слиток', shape: 'ingot', color: [0.86, 0.85, 0.83] }),
   GoldIngot: item({ name: 'gold_ingot', label: 'Золотой слиток', shape: 'ingot', color: [0.98, 0.80, 0.28] }),
@@ -168,6 +241,9 @@ export const Item = {
   IronPickaxe: tool('iron_pickaxe', 'Железная кирка', ToolKind.Pickaxe, Tier.Iron, 'pickaxe', IRON_COLOR),
   IronShovel: tool('iron_shovel', 'Железная лопата', ToolKind.Shovel, Tier.Iron, 'shovel', IRON_COLOR),
   IronAxe: tool('iron_axe', 'Железный топор', ToolKind.Axe, Tier.Iron, 'axe', IRON_COLOR),
+
+  Iron: armourSet('iron', 'Железный', IRON_COLOR, [2, 6, 5, 2], [165, 240, 225, 195]),
+  Diamond_: armourSet('diamond', 'Алмазный', [0.44, 0.88, 0.86], [3, 8, 6, 3], [363, 528, 495, 429]),
 } as const;
 
 export const ITEMS: ReadonlyArray<ItemDef> = DEFS;
@@ -190,6 +266,13 @@ export const itemForBlock = (block: Block): ItemId => block;
 export const blockOfItem = (id: ItemId): Block => DEFS[id]?.block ?? Block.Air;
 
 export const isTool = (id: ItemId): boolean => (DEFS[id]?.durability ?? 0) > 0;
+
+/** Where this item is worn, or `ArmourSlot.None`. */
+export const armourSlotOf = (id: ItemId): ArmourSlot =>
+  DEFS[id]?.armour ?? ArmourSlot.None;
+
+/** Hunger points this restores, or 0 if it is not food. */
+export const foodValue = (id: ItemId): number => DEFS[id]?.food ?? 0;
 
 /** One stack in one slot. `damage` counts uses spent, and is 0 for anything but a tool. */
 export interface ItemStack {

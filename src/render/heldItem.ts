@@ -34,7 +34,10 @@ const HAND_DOWN = 0.20;
 const HAND_FORWARD = 0.50;
 
 const CUBE_SCALE = 0.16;
-const SPRITE_SCALE = 0.22;
+// Sprites are billboards and the shader widens them by half again, so this
+// number is not comparable to the cube's — an apple at 0.22 filled a quarter
+// of the screen.
+const SPRITE_SCALE = 0.13;
 
 /** Resting angles. A block held square-on to the camera reads as a wall. */
 const REST_SPIN = 0.7;

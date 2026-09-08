@@ -45,6 +45,14 @@ export interface SavedState {
   furnaces?: number[];
   /** Chests, as position + a run of filled slots; see `Chests.serialize`. */
   chests?: number[];
+  /**
+   * Health and hunger, in the reference's half-hearts and points.
+   *
+   * Absent in worlds saved before there was either, and absent means full —
+   * which is what a new world starts with, so old saves need no migration.
+   */
+  health?: number;
+  hunger?: number;
 }
 
 const DB_NAME = 'supergraph';
@@ -153,7 +161,8 @@ export class WorldSave {
       Math.abs(prev.x - next.x) < 0.5 && Math.abs(prev.y - next.y) < 0.5 &&
       Math.abs(prev.z - next.z) < 0.5 && Math.abs(prev.time - next.time) < 0.004 &&
       prev.hotbar === next.hotbar && prev.inventory === next.inventory &&
-      prev.furnaces === next.furnaces && prev.chests === next.chests) return;
+      prev.furnaces === next.furnaces && prev.chests === next.chests &&
+      prev.health === next.health && prev.hunger === next.hunger) return;
     this.playerState = next;
     this.stateDirty = true;
   }

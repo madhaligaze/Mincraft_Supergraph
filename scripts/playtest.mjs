@@ -840,7 +840,11 @@ if (!tree) {
   const byPick = await mineAimed(80);
   const pickDrops = await api(() => window.supergraph.droppedItems());
 
-  if (byHand && byHand.gone && handDrops.length > 0) {
+  // Cobblestone specifically, not "anything on the ground": leaves decaying
+  // from the tree felled two acts ago keep dropping apples, and one of them
+  // landing nearby used to read as stone giving up its cobble to a bare hand.
+  const handCobble = handDrops.filter((d) => d.item === 'cobblestone').length;
+  if (byHand && byHand.gone && handCobble > 0) {
     record('bad', 'камень рукой всё равно даёт булыжник',
       `в эталоне без кирки не выпадает ничего; выпало ${JSON.stringify(handDrops)}`);
   } else if (byHand && byHand.gone) {
@@ -1188,16 +1192,27 @@ const emptyHand = await api(() => {
   // and report that an empty hand draws a pickaxe.
   let empty = a.inventory.slots.findIndex((s, i) => i < 9 && !s);
   if (empty < 0) {
+    // Emptying slot 0 and calling `add` puts the same stack straight back into
+    // it — `add` fills the first empty slot, which is the one just freed. Move
+    // it to a named slot in storage instead.
     empty = 0;
     const displaced = a.inventory.get(0);
     a.inventory.set(0, null);
-    if (displaced) a.inventory.add(displaced);
+    if (displaced) {
+      const spare = a.inventory.slots.findIndex((s, i) => i >= 9 && !s);
+      if (spare >= 0) a.inventory.set(spare, displaced);
+    }
   }
   a.inventory.selected = empty;
-  return a.hand();
+  return empty;
 });
-if (emptyHand.drawn) {
-  record('note', 'пустая рука что-то рисует', JSON.stringify(emptyHand));
+// A frame has to pass: `hand()` reports what the renderer was last *given*,
+// and the slot was changed after that frame was built.
+await waitFrames(2);
+const emptyHandNow = await api(() => window.supergraph.hand());
+if (emptyHandNow.drawn) {
+  record('bad', 'пустая рука что-то рисует',
+    `слот ${emptyHand}, ${JSON.stringify(emptyHandNow)}`);
 } else {
   ok('пустая рука ничего не рисует');
 }
@@ -1537,7 +1552,7 @@ if (!vitals0 || vitals0.max !== 20) {
     } else {
       ok('при смерти вещи выпадают', `${died.ground} стопок на земле`);
     }
-    await shoot('09-death');
+    await shoot('10-death');
 
     const back = await api(() => window.supergraph.respawn());
     if (back.dead || back.health < 20) {
@@ -1549,8 +1564,179 @@ if (!vitals0 || vitals0.max !== 20) {
 }
 flushErrors();
 
+// --- armour --------------------------------------------------------------
+//
+// The point of iron. Without it a diamond mine is exactly as survivable as a
+// dirt hut, and the ore in the walls is decoration.
+await act('броня');
+
+await api(() => { window.supergraph.give('iron_ingot', 5); });
+const helmet = await craftIn([
+  'iron_ingot', 'iron_ingot', 'iron_ingot',
+  'iron_ingot', null, 'iron_ingot',
+  null, null, null,
+], 3);
+if (!helmet || helmet.item !== 'iron_helmet') {
+  record('stop', 'шлем не крафтится из слитков', JSON.stringify(helmet));
+} else {
+  ok('шлем скрафчен');
+}
+
+const bareHit = await api(() => {
+  const a = window.supergraph;
+  a.player.health = 20;
+  a.player.dead = false;
+  a.inventory.armour.fill(null);
+  a.hurt(10, 'fall');
+  return a.vitals();
+});
+const armouredHit = await api(() => {
+  const a = window.supergraph;
+  a.player.health = 20;
+  a.player.dead = false;
+  for (const piece of ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']) {
+    a.give(piece, 1);
+    a.wear(piece);
+  }
+  const defense = a.vitals().defense;
+  a.hurt(10, 'fall');
+  return { defense, after: a.vitals() };
+});
+
+if (armouredHit.defense !== 15) {
+  record('bad', 'полный железный набор даёт не 15 очков брони',
+    `${armouredHit.defense}`);
+} else {
+  ok('полный железный набор — 15 очков брони');
+}
+if (armouredHit.after.health <= bareHit.health) {
+  record('stop', 'броня не уменьшает урон',
+    `без брони осталось ${bareHit.health}, в броне ${armouredHit.after.health}`);
+} else {
+  ok('броня уменьшает урон',
+    `тот же удар: ${20 - bareHit.health} без брони, ${20 - armouredHit.after.health} в броне`);
+}
+const worn = armouredHit.after.armour.filter((p) => p && p.damage > 0).length;
+if (worn < 4) {
+  record('bad', 'броня не изнашивается от удара', `изношено ${worn} из 4`);
+} else {
+  ok('броня изнашивается от удара', `все ${worn} части`);
+}
+
+// Drowning goes through armour, as in the reference.
+const drowned = await api(() => {
+  const a = window.supergraph;
+  a.player.health = 20;
+  a.player.dead = false;
+  a.hurt(4, 'drown');
+  return a.vitals().health;
+});
+if (drowned > 16) {
+  record('bad', 'броня защищает от утопления', `осталось ${drowned} из 20`);
+} else {
+  ok('от утопления броня не спасает', `осталось ${drowned}`);
+}
+flushErrors();
+
+// --- hunger --------------------------------------------------------------
+//
+// The clock that sends a player back up. Without it, iron tools and a torch
+// mean you never have to leave the mine again.
+await act('голод');
+
+const hungerStart = await api(() => {
+  const a = window.supergraph;
+  a.player.hunger = 20;
+  a.player.health = 20;
+  a.player.dead = false;
+  a.player.addExhaustion(4 * 6);
+  return a.vitals();
+});
+await waitFrames(2);
+const spent = await api(() => window.supergraph.vitals().hunger);
+if (spent >= hungerStart.hunger) {
+  record('stop', 'голод не тратится', `${hungerStart.hunger} -> ${spent}`);
+} else {
+  ok('усилие тратит голод', `${hungerStart.hunger} -> ${spent} за шесть очков усталости`);
+}
+
+// Apples come off oak leaves, and are the only food in the world.
+const apples = await api(() => {
+  const a = window.supergraph;
+  let dropped = 0;
+  for (let i = 0; i < 400; i++) {
+    for (const item of a.dropsOf('oak_leaves')) if (item.item === 'apple') dropped++;
+  }
+  return dropped;
+});
+if (apples === 0) {
+  record('bad', 'дубовая листва не даёт яблок', 'еды в мире нет вовсе');
+} else {
+  ok('дубовая листва роняет яблоки', `${apples} на 400 блоков`);
+}
+
+const before = await api(() => {
+  const a = window.supergraph;
+  a.give('apple', 3);
+  a.equip('apple');
+  return a.vitals().hunger;
+});
+await api(() => window.supergraph.button(2, true));
+let eaten = false;
+for (let i = 0; i < 30 && !eaten; i++) {
+  await waitFrames(1);
+  eaten = await api((h) => window.supergraph.vitals().hunger > h, before);
+}
+await api(() => window.supergraph.button(2, false));
+if (!eaten) {
+  record('stop', 'яблоко не съедается удержанием правой кнопки',
+    `голод ${await api(() => window.supergraph.vitals().hunger)}`);
+} else {
+  const now = await api(() => ({
+    hunger: window.supergraph.vitals().hunger,
+    left: window.supergraph.have('apple'),
+  }));
+  ok('яблоко съедается и кормит', `голод ${before} -> ${now.hunger}, осталось ${now.left}`);
+}
+
+const starving = await api(() => {
+  const a = window.supergraph;
+  a.player.hunger = 0;
+  a.player.health = 8;
+  return a.vitals().health;
+});
+let starved = false;
+for (let i = 0; i < 90 && !starved; i++) {
+  await waitFrames(1);
+  starved = await api((h) => window.supergraph.vitals().health < h, starving);
+}
+if (!starved) {
+  record('bad', 'пустой голод не вредит', `здоровье ${starving} не изменилось`);
+} else {
+  ok('пустой голод отнимает здоровье',
+    `${starving} -> ${await api(() => window.supergraph.vitals().health)}`);
+}
+await shoot('09-gear');
+flushErrors();
+
 // --- water ---------------------------------------------------------------
 await act('вода');
+// Whole and fed first: the previous act deliberately leaves the player starving
+// on seven half-hearts, and drowning finishes them in two seconds — which turns
+// a swimming check into a death check.
+//
+// Health is set directly rather than by pressing respawn: that button carries
+// the closure from the *last* death, which teleports to the world spawn — and
+// a swimming test that starts by moving the player somewhere else is a test of
+// somewhere else.
+await api(() => {
+  const a = window.supergraph;
+  a.player.health = 20;
+  a.player.hunger = 20;
+  a.player.dead = false;
+  a.player.flying = false;
+  a.closeInventory();
+});
 const swam = await api(() => {
   const a = window.supergraph;
   const { world, player } = a;
@@ -1569,14 +1755,43 @@ const swam = await api(() => {
   }
   return null;
 });
-if (!swam) {
+if (swam) {
+  // The search checked the column before the teleport; check it again after,
+  // because "the player is where I put them" is an assumption, not a fact.
+  await waitFrames(2);
+  const landed = await api(() => {
+    const a = window.supergraph;
+    const eye = a.player.camera.position;
+    return a.isWater(a.world.getBlock(
+      Math.floor(eye[0]), Math.floor(eye[1]), Math.floor(eye[2])));
+  });
+  if (!landed) {
+    record('note', 'после телепорта голова оказалась не в воде, купание не проверено');
+    swam.skipped = true;
+  }
+}
+
+if (!swam || swam.skipped) {
   record('note', 'не нашлось воды рядом, купание не проверено');
 } else {
   await sleep(4000);
   const w = await state();
-  if (!w.underwater) record('bad', 'под водой игра не считает игрока под водой');
+  if (!w.underwater) {
+    const why = await api(() => {
+      const a = window.supergraph;
+      const p = a.player;
+      const eye = p.camera.position;
+      return {
+        pos: [...p.position].map((v) => +v.toFixed(2)),
+        atEye: a.blockName(a.world.getBlock(
+          Math.floor(eye[0]), Math.floor(eye[1]), Math.floor(eye[2]))),
+        health: p.health, dead: p.dead, flying: p.flying, inFluid: p.inFluid,
+      };
+    });
+    record('bad', 'под водой игра не считает игрока под водой', JSON.stringify(why));
+  }
   else ok('погружение распознано', `дыхание ${(w.breath * 100).toFixed(0)}%`);
-  await shoot('10-underwater');
+  await shoot('11-underwater');
 
   // Breath must actually drain.
   await sleep(6000);
@@ -1616,7 +1831,7 @@ await api(() => {
   a.faceSun(2.6, -0.05);
 });
 await sleep(9000);
-await shoot('11-night');
+await shoot('12-night');
 flushErrors();
 
 // --- what a session costs ------------------------------------------------

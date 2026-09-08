@@ -13,7 +13,7 @@ import {
 } from '../world/blocks.ts';
 import { isLava, isWater } from '../world/fluids.ts';
 import type { Inventory } from '../game/inventory.ts';
-import { blockOfItem } from '../game/items.ts';
+import { blockOfItem, foodValue } from '../game/items.ts';
 import { breakSeconds } from '../game/mining.ts';
 import { WORLD_HEIGHT } from '../world/constants.ts';
 import {
@@ -67,6 +67,23 @@ const DROWN_DAMAGE = 2;
 const REGEN_DELAY = 5;
 const REGEN_INTERVAL = 4;
 
+// --- hunger, in the reference's units: twenty points, four exhaustion each ---
+
+/** Exhaustion needed to spend one hunger point. */
+const EXHAUSTION_PER_POINT = 4;
+/** Exhaustion per block walked, sprinted, and per jump. */
+const EXHAUSTION_WALK = 0.01;
+const EXHAUSTION_SPRINT = 0.1;
+const EXHAUSTION_JUMP = 0.05;
+/** Exhaustion for breaking one block. */
+const EXHAUSTION_MINE = 0.005;
+/** Below this, the body stops healing. The reference's threshold. */
+const REGEN_HUNGER = 18;
+/** Seconds between starvation hits once hunger is empty. */
+const STARVE_INTERVAL = 4;
+/** Seconds of holding the button to finish a meal. */
+const EAT_SECONDS = 1.6;
+
 /** Depth over which the water around the camera reaches its darkest, in blocks. */
 const SUBMERSION_DEPTH = 20;
 /** How long a full breath lasts underwater. */
@@ -86,8 +103,11 @@ const MAX_PHYSICS_STEP = 0.05;
 
 /** What an interaction did to the world, for the caller to react to. */
 export interface BlockEvent {
-  /** `use` is a right-click the block itself answered — a crafting table. */
-  kind: 'break' | 'place' | 'use';
+  /**
+   * `use` is a right-click the block itself answered — a crafting table;
+   * `eat` is a meal finishing, and carries no block at all.
+   */
+  kind: 'break' | 'place' | 'use' | 'eat';
   /** The block that was broken, placed, or used. */
   block: number;
   x: number;
@@ -96,7 +116,8 @@ export interface BlockEvent {
 }
 
 /** Where damage came from. The HUD says it, and the death message reads it. */
-export type DamageCause = 'fall' | 'lava' | 'cactus' | 'drown' | 'crush' | 'void';
+export type DamageCause =
+  'fall' | 'lava' | 'cactus' | 'drown' | 'crush' | 'void' | 'starve';
 
 /** How far along the block under the crosshair is, for the HUD and the shader. */
 export interface BreakState {
@@ -158,6 +179,19 @@ export class Player {
 
   /** Set for one frame when damage lands, for the HUD flash and the sound. */
   lastHurt: { amount: number; cause: DamageCause } | null = null;
+
+  /**
+   * Hunger, 0..20, and the exhaustion that spends it.
+   *
+   * Without it there is no reason to ever go up: a player who has iron tools
+   * and a torch can live in a mine for ever. Hunger is the clock that sends
+   * them back to the surface, and the reason an apple tree is worth remembering.
+   */
+  hunger = 20;
+  private exhaustion = 0;
+  private starveTimer = STARVE_INTERVAL;
+  /** Seconds spent holding the eat button, 0 when not eating. */
+  eating = 0;
 
   /** Seconds since the last damage; regeneration waits this out. */
   private sinceDamage = 0;
@@ -314,6 +348,8 @@ export class Player {
       if (damage > 0) this.hurt(damage, 'fall');
     }
 
+    this.updateHunger(dt);
+
     const x = Math.floor(this.position[0]);
     const z = Math.floor(this.position[2]);
     const feetY = Math.floor(this.position[1] + 0.1);
@@ -354,7 +390,10 @@ export class Player {
     }
 
     this.sinceDamage += dt;
-    if (this.health < this.maxHealth && this.sinceDamage > REGEN_DELAY) {
+    // Healing runs on food, as in the reference: a starving player does not
+    // recover, which is what makes hunger a threat rather than a chore.
+    if (this.health < this.maxHealth && this.sinceDamage > REGEN_DELAY &&
+        this.hunger >= REGEN_HUNGER) {
       this.regenTimer -= dt;
       if (this.regenTimer <= 0) {
         this.regenTimer = REGEN_INTERVAL;
@@ -365,9 +404,54 @@ export class Player {
     }
   }
 
+  /**
+   * Spends hunger on effort, and starves the player when there is none left.
+   *
+   * Exhaustion is the reference's mechanism: everything the player does adds a
+   * little, and every four of it costs a hunger point. It means sprinting
+   * across a continent costs food and standing still does not.
+   */
+  private updateHunger(dt: number): void {
+    if (this.exhaustion >= EXHAUSTION_PER_POINT) {
+      const points = Math.floor(this.exhaustion / EXHAUSTION_PER_POINT);
+      this.exhaustion -= points * EXHAUSTION_PER_POINT;
+      this.hunger = Math.max(0, this.hunger - points);
+    }
+
+    if (this.hunger > 0) {
+      this.starveTimer = STARVE_INTERVAL;
+      return;
+    }
+
+    // Starvation stops at half a heart rather than killing outright: dying of
+    // hunger while asleep in a mine is a way to lose a session, not a lesson.
+    this.starveTimer -= dt;
+    if (this.starveTimer <= 0) {
+      this.starveTimer = STARVE_INTERVAL;
+      if (this.health > 1) this.hurt(1, 'starve');
+    }
+  }
+
+  /** Adds effort. Public because mining and jumping happen elsewhere. */
+  addExhaustion(amount: number): void {
+    this.exhaustion += amount;
+  }
+
   /** Applies damage. Public so lava-splash and future mobs can call it. */
   hurt(amount: number, cause: DamageCause): void {
     if (this.dead || amount <= 0) return;
+
+    // Armour: four percent off per point, capped at twenty points, and every
+    // worn piece takes a hit. Drowning goes straight through it — armour does
+    // not help you breathe, and in the reference it does not.
+    if (cause !== 'drown') {
+      const defense = Math.min(20, this.inventory.defense);
+      if (defense > 0) {
+        amount = Math.max(1, Math.round(amount * (1 - defense * 0.04)));
+        this.inventory.damageArmour(1);
+      }
+    }
+
     this.health = Math.max(0, this.health - amount);
     this.sinceDamage = 0;
     this.lastHurt = { amount, cause };
@@ -377,6 +461,9 @@ export class Player {
   /** Back on your feet with a full bar. The caller decides where. */
   revive(): void {
     this.health = this.maxHealth;
+    this.hunger = 20;
+    this.exhaustion = 0;
+    this.eating = 0;
     this.dead = false;
     this.breath = 1;
     this.drowning = false;
@@ -503,6 +590,7 @@ export class Player {
       if (input.isDown('Space') && this.onGround) {
         this.velocity[1] = JUMP_VELOCITY;
         this.onGround = false;
+        this.exhaustion += EXHAUSTION_JUMP;
       }
     }
 
@@ -548,6 +636,8 @@ export class Player {
     const dx = this.velocity[0] * dt;
     const dy = this.velocity[1] * dt;
     const dz = this.velocity[2] * dt;
+    const beforeX = this.position[0];
+    const beforeZ = this.position[2];
 
     const wasFalling = this.velocity[1];
     this.onGround = false;
@@ -555,6 +645,13 @@ export class Player {
     this.moveAxis(1, dy);
     this.moveAxis(0, dx);
     this.moveAxis(2, dz);
+
+    // Effort is charged for distance actually covered, not for input: walking
+    // into a wall is not exercise.
+    if (this.onGround && !this.flying) {
+      const moved = Math.hypot(this.position[0] - beforeX, this.position[2] - beforeZ);
+      this.exhaustion += moved * (this.sprinting ? EXHAUSTION_SPRINT : EXHAUSTION_WALK);
+    }
 
     // The **largest** impact since the last read, not the latest.
     //
@@ -695,6 +792,24 @@ export class Player {
       return null;
     }
 
+    // Eating comes before everything else the right button does: a held apple
+    // is not a block, so nothing else would happen anyway, and checking it
+    // first keeps the "hold to eat" timer out of the placement path.
+    const held = this.inventory.held;
+    const food = held ? foodValue(held.id) : 0;
+    if (food > 0 && this.hunger < 20 && this.input.isButtonDown(2)) {
+      this.eating += dt;
+      if (this.eating >= EAT_SECONDS) {
+        this.eating = 0;
+        this.hunger = Math.min(20, this.hunger + food);
+        this.inventory.consumeHeld(1);
+        return { kind: 'eat', block: Block.Air, x: 0, y: 0, z: 0 };
+      }
+      this.breaking = null;
+      return null;
+    }
+    this.eating = 0;
+
     const hit = this.pick();
 
     if (this.input.isButtonDown(0) && hit) {
@@ -722,6 +837,7 @@ export class Player {
 
       if (state.progress >= 1) {
         this.breaking = null;
+        this.exhaustion += EXHAUSTION_MINE;
         return this.world.setBlock(hit.x, hit.y, hit.z, Block.Air)
           ? { kind: 'break', block: hit.block, x: hit.x, y: hit.y, z: hit.z }
           : null;

@@ -181,6 +181,96 @@ function drawBlock(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void
   ctx.fill();
 }
 
+/**
+ * Armour. Four silhouettes, which is all a player reads at slot size — and the
+ * slot they belong in is unambiguous from the shape alone.
+ */
+function drawArmour(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
+  ctx.fillStyle = rgb(def.color, 0.9);
+  ctx.strokeStyle = rgb(def.color, 0.55);
+  ctx.lineWidth = Math.max(1, s * 0.045);
+
+  if (def.shape === 'helmet') {
+    ctx.beginPath();
+    ctx.arc(s * 0.5, s * 0.52, s * 0.27, Math.PI, 0);
+    ctx.lineTo(s * 0.77, s * 0.70);
+    ctx.lineTo(s * 0.63, s * 0.70);
+    ctx.lineTo(s * 0.63, s * 0.58);
+    ctx.lineTo(s * 0.37, s * 0.58);
+    ctx.lineTo(s * 0.37, s * 0.70);
+    ctx.lineTo(s * 0.23, s * 0.70);
+    ctx.closePath();
+  } else if (def.shape === 'chestplate') {
+    ctx.beginPath();
+    ctx.moveTo(s * 0.22, s * 0.28);
+    ctx.lineTo(s * 0.38, s * 0.28);
+    ctx.lineTo(s * 0.50, s * 0.38);
+    ctx.lineTo(s * 0.62, s * 0.28);
+    ctx.lineTo(s * 0.78, s * 0.28);
+    ctx.lineTo(s * 0.78, s * 0.74);
+    ctx.lineTo(s * 0.22, s * 0.74);
+    ctx.closePath();
+  } else if (def.shape === 'leggings') {
+    ctx.beginPath();
+    ctx.moveTo(s * 0.26, s * 0.26);
+    ctx.lineTo(s * 0.74, s * 0.26);
+    ctx.lineTo(s * 0.74, s * 0.78);
+    ctx.lineTo(s * 0.58, s * 0.78);
+    ctx.lineTo(s * 0.55, s * 0.50);
+    ctx.lineTo(s * 0.45, s * 0.50);
+    ctx.lineTo(s * 0.42, s * 0.78);
+    ctx.lineTo(s * 0.26, s * 0.78);
+    ctx.closePath();
+  } else {
+    // Boots: two of them, side by side.
+    ctx.beginPath();
+    ctx.moveTo(s * 0.22, s * 0.40);
+    ctx.lineTo(s * 0.44, s * 0.40);
+    ctx.lineTo(s * 0.44, s * 0.66);
+    ctx.lineTo(s * 0.22, s * 0.66);
+    ctx.closePath();
+    ctx.moveTo(s * 0.56, s * 0.40);
+    ctx.lineTo(s * 0.78, s * 0.40);
+    ctx.lineTo(s * 0.78, s * 0.66);
+    ctx.lineTo(s * 0.56, s * 0.66);
+    ctx.closePath();
+  }
+
+  ctx.fill();
+  ctx.stroke();
+
+  // A highlight along the top, so the metal reads as metal.
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = rgb(def.color, 1.35);
+  ctx.fillRect(s * 0.26, s * 0.30, s * 0.2, s * 0.04);
+  ctx.globalAlpha = 1;
+}
+
+/** An apple: a round body, a bite of shading, a stalk and a leaf. */
+function drawApple(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
+  ctx.beginPath();
+  ctx.ellipse(s * 0.5, s * 0.58, s * 0.27, s * 0.26, 0, 0, Math.PI * 2);
+  ctx.fillStyle = rgb(def.color);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.ellipse(s * 0.40, s * 0.50, s * 0.10, s * 0.08, -0.5, 0, Math.PI * 2);
+  ctx.fillStyle = rgb(def.color, 1.8, 0.75);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(90, 62, 30, 1)';
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(s * 0.5, s * 0.34);
+  ctx.quadraticCurveTo(s * 0.52, s * 0.24, s * 0.48, s * 0.20);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.ellipse(s * 0.60, s * 0.26, s * 0.10, s * 0.05, -0.6, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(70, 130, 50, 1)';
+  ctx.fill();
+}
+
 function paint(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
   ctx.clearRect(0, 0, s, s);
   switch (def.shape) {
@@ -188,6 +278,11 @@ function paint(ctx: CanvasRenderingContext2D, s: number, def: ItemDef): void {
     case 'lump': drawLump(ctx, s, def); break;
     case 'ingot': drawIngot(ctx, s, def); break;
     case 'stick': drawStick(ctx, s, def); break;
+    case 'apple': drawApple(ctx, s, def); break;
+    case 'helmet':
+    case 'chestplate':
+    case 'leggings':
+    case 'boots': drawArmour(ctx, s, def); break;
     default: drawTool(ctx, s, def); break;
   }
 }

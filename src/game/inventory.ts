@@ -11,7 +11,8 @@
  */
 
 import {
-  NO_ITEM, itemDef, maxStack, sameItem, stack, type ItemId, type ItemStack,
+  ARMOUR_SLOTS, ArmourSlot, NO_ITEM, armourSlotOf, itemDef, maxStack, sameItem,
+  stack, type ItemId, type ItemStack,
 } from './items.ts';
 
 export const HOTBAR_SIZE = 9;
@@ -23,6 +24,15 @@ export type Slot = ItemStack | null;
 
 export class Inventory {
   readonly slots: Slot[] = new Array(INVENTORY_SIZE).fill(null);
+
+  /**
+   * What is being worn: head, chest, legs, feet.
+   *
+   * A separate array rather than four more slots on the end, because these are
+   * not storage — nothing may be stacked here, only the right kind of item goes
+   * in, and the damage code reads them every time the player is hit.
+   */
+  readonly armour: Slot[] = new Array(ARMOUR_SLOTS).fill(null);
 
   /** The stack on the cursor while the inventory window is open. */
   cursor: Slot = null;
@@ -138,6 +148,56 @@ export class Inventory {
     }
     if (left !== count) this.touch();
     return count - left;
+  }
+
+  /**
+   * Armour points being worn, 0..20.
+   *
+   * The reference takes four percent off incoming damage per point, so a full
+   * iron set (fifteen) is sixty percent.
+   */
+  get defense(): number {
+    let total = 0;
+    for (const piece of this.armour) if (piece) total += itemDef(piece.id).defense;
+    return total;
+  }
+
+  /**
+   * Wears the armour by one hit each, dropping whatever breaks.
+   *
+   * Every piece takes the damage, not just the one that "would have been hit":
+   * that is the reference's rule, and it is why a set wears out evenly rather
+   * than leaving three pieces and a hole.
+   */
+  damageArmour(amount = 1): void {
+    if (amount <= 0) return;
+    let changed = false;
+    for (let i = 0; i < this.armour.length; i++) {
+      const piece = this.armour[i];
+      if (!piece) continue;
+      const limit = itemDef(piece.id).durability;
+      if (limit <= 0) continue;
+      piece.damage += amount;
+      changed = true;
+      if (piece.damage >= limit) this.armour[i] = null;
+    }
+    if (changed) this.touch();
+  }
+
+  /** Writes one armour slot. Goes through here so the version is bumped. */
+  setArmour(index: number, value: Slot): void {
+    this.armour[index] = value && value.count > 0 ? value : null;
+    this.touch();
+  }
+
+  /** Puts a piece on, returning whatever it displaced. */
+  equipArmour(item: ItemStack): Slot {
+    const slot = armourSlotOf(item.id);
+    if (slot === ArmourSlot.None) return item;
+    const previous = this.armour[slot];
+    this.armour[slot] = item;
+    this.touch();
+    return previous;
   }
 
   /** Spends one of the held stack — what placing a block costs. */
@@ -266,17 +326,28 @@ export class Inventory {
       if (!slot) continue;
       out.push(i, slot.id, slot.count, slot.damage);
     }
+    // Worn pieces ride in the same list at indices past the bag; a loader that
+    // does not know about armour simply skips them as out of range.
+    for (let i = 0; i < ARMOUR_SLOTS; i++) {
+      const piece = this.armour[i];
+      if (!piece) continue;
+      out.push(INVENTORY_SIZE + i, piece.id, piece.count, piece.damage);
+    }
     return out;
   }
 
   load(data: readonly number[] | undefined): void {
     this.slots.fill(null);
+    this.armour.fill(null);
     if (data) {
       for (let i = 0; i + 3 < data.length; i += 4) {
         const index = data[i];
-        if (index < 0 || index >= INVENTORY_SIZE) continue;
         if (data[i + 1] === NO_ITEM || data[i + 2] <= 0) continue;
-        this.slots[index] = stack(data[i + 1], data[i + 2], data[i + 3]);
+        const item = stack(data[i + 1], data[i + 2], data[i + 3]);
+        if (index >= 0 && index < INVENTORY_SIZE) this.slots[index] = item;
+        else if (index >= INVENTORY_SIZE && index < INVENTORY_SIZE + ARMOUR_SLOTS) {
+          this.armour[index - INVENTORY_SIZE] = item;
+        }
       }
     }
     this.touch();
@@ -284,6 +355,7 @@ export class Inventory {
 
   clear(): void {
     this.slots.fill(null);
+    this.armour.fill(null);
     this.cursor = null;
     this.touch();
   }

@@ -37,7 +37,11 @@ set(Block.DiamondOre, [drop(Item.Diamond)]);
 
 // Leaves give the odd stick, which is what makes a treeless start survivable.
 const LEAF_DROPS = [drop(Item.Stick, 1, 2, 0.06)];
-set(Block.OakLeaves, LEAF_DROPS);
+// Oak also drops apples — the only food in the world, so the rate is the
+// reference's raised from half a percent to five: with no farms and no animals
+// a player who never finds one starves, and that is a worse game than a
+// generous apple tree.
+set(Block.OakLeaves, [...LEAF_DROPS, drop(Item.Apple, 1, 1, 0.05)]);
 set(Block.BirchLeaves, LEAF_DROPS);
 set(Block.SpruceLeaves, LEAF_DROPS);
 

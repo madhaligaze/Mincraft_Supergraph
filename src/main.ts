@@ -186,6 +186,10 @@ async function boot(): Promise<void> {
     inventory.load(resumed.inventory);
     furnaces.load(resumed.furnaces);
     chests.load(resumed.chests);
+    // A world resumed at two hearts is resumed at two hearts. Waking up healed
+    // makes every dangerous situation escapable by reloading.
+    if (typeof resumed.health === 'number') player.health = Math.max(1, resumed.health);
+    if (typeof resumed.hunger === 'number') player.hunger = resumed.hunger;
     renderer.sky.timeOfDay = resumed.time;
   }
 
@@ -423,6 +427,20 @@ async function boot(): Promise<void> {
      */
     blockId: (name: string) => BLOCKS.find((b) => b.name === name)?.id ?? -1,
     /**
+     * Rolls a block's drop table once, by name.
+     *
+     * So a test can ask what a block gives instead of breaking four hundred of
+     * them: an apple at five percent needs a sample, not a lucky swing.
+     */
+    dropsOf(name: string, tool: string | null = null) {
+      const found = BLOCKS.find((b) => b.name === name);
+      if (!found) return [];
+      const held = tool ? stack(itemByName(tool), 1) : null;
+      return dropsFor(found.id, held).map((d) => ({
+        item: itemDef(d.id).name, count: d.count,
+      }));
+    },
+    /**
      * Seconds this block takes to break with what is currently in hand.
      *
      * So a test can ask instead of assuming. A check that "one click is not
@@ -506,7 +524,20 @@ async function boot(): Promise<void> {
       dead: player.dead,
       cause: player.lastHurt?.cause ?? null,
       deathPanel: hud.deathVisible,
+      hunger: player.hunger,
+      eating: player.eating,
+      defense: inventory.defense,
+      armour: inventory.armour.map((piece) => (piece
+        ? { item: itemDef(piece.id).name, damage: piece.damage } : null)),
     }),
+    /** Puts a named piece of armour on, for setting a test up. */
+    wear(name: string) {
+      const id = itemByName(name);
+      if (id === 0) return false;
+      const displaced = inventory.equipArmour(stack(id, 1));
+      if (displaced) inventory.add(displaced);
+      return true;
+    },
     /** Applies damage directly, for testing the consequences of it. */
     hurt(amount = 1, cause = 'fall') {
       player.hurt(amount, cause as Parameters<typeof player.hurt>[1]);
@@ -893,6 +924,8 @@ async function boot(): Promise<void> {
           if (inventory.damageHeld(1)) audio.dig(event.block);
         } else if (event.kind === 'place') {
           audio.place(event.block);
+        } else if (event.kind === 'eat') {
+          audio.pickup();
         } else if (event.kind === 'use') {
           if (event.block === Block.CraftingTable) {
             inventoryWindow.show(3, 'Верстак');
@@ -929,6 +962,8 @@ async function boot(): Promise<void> {
     }
     hud.updateHotbar(dt);
     hud.updateHealth(player.health, dt);
+    hud.updateArmour(inventory.defense);
+    hud.updateHunger(player.hunger);
     inventoryWindow.refresh();
 
     renderer.sky.update(running ? dt : 0);
@@ -966,6 +1001,8 @@ async function boot(): Promise<void> {
       inventory: savedInventory,
       furnaces: savedFurnaces,
       chests: savedChests,
+      health: player.health,
+      hunger: player.hunger,
     });
     world.updateSave(dt);
     // Fluids tick on their own clock inside; passing dt every frame is what

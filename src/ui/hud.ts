@@ -31,6 +31,12 @@ export class Hud {
 
   private readonly heldLabelEl: HTMLElement;
   private readonly healthEl: HTMLElement;
+  private readonly armourEl: HTMLElement;
+  private armourPips: HTMLElement[] = [];
+  private shownArmour = -1;
+  private readonly hungerEl: HTMLElement;
+  private hungerPips: HTMLElement[] = [];
+  private shownHunger = -1;
   private readonly flashEl: HTMLElement;
   private readonly deathEl: HTMLElement;
   private readonly deathCauseEl: HTMLElement;
@@ -85,6 +91,19 @@ export class Hud {
 
     this.healthEl = document.getElementById('health')!;
 
+    // Armour sits on its own row above the hearts, and disappears when there
+    // is none: an empty bar that never fills is furniture.
+    this.armourEl = document.createElement('div');
+    this.armourEl.id = 'armour';
+    this.armourEl.hidden = true;
+    this.hudEl.insertBefore(this.armourEl, this.healthEl);
+
+    // Hunger goes under the hearts, and unlike armour it is always on screen:
+    // the whole point of it is that the player watches it fall.
+    this.hungerEl = document.createElement('div');
+    this.hungerEl.id = 'hunger';
+    this.hudEl.insertBefore(this.hungerEl, this.breathEl);
+
     // A red wash over the whole screen when something bites. Done in the DOM
     // rather than in the composite shader on purpose: it is interface, not
     // scene, and it costs the renderer nothing.
@@ -109,6 +128,8 @@ export class Hud {
 
     this.buildHotbar();
     this.buildHearts();
+    this.buildArmour();
+    this.buildHunger();
     this.buildSettings();
   }
 
@@ -122,6 +143,54 @@ export class Hud {
       this.healthEl.appendChild(heart);
       this.hearts.push(heart);
     }
+  }
+
+  private buildArmour(): void {
+    this.armourEl.textContent = '';
+    this.armourPips = [];
+    // Ten pips for twenty points, like the hearts: one pip is two points.
+    for (let i = 0; i < 10; i++) {
+      const pip = document.createElement('div');
+      pip.className = 'pip';
+      this.armourEl.appendChild(pip);
+      this.armourPips.push(pip);
+    }
+  }
+
+  /** Paints the armour row, hiding it entirely when nothing is worn. */
+  updateArmour(points: number): void {
+    if (points === this.shownArmour) return;
+    this.shownArmour = points;
+    this.armourEl.hidden = points <= 0;
+    if (points <= 0) return;
+    for (let i = 0; i < this.armourPips.length; i++) {
+      const filled = points - i * 2;
+      this.armourPips[i].classList.toggle('full', filled >= 2);
+      this.armourPips[i].classList.toggle('half', filled === 1);
+    }
+  }
+
+  private buildHunger(): void {
+    this.hungerEl.textContent = '';
+    this.hungerPips = [];
+    for (let i = 0; i < 10; i++) {
+      const pip = document.createElement('div');
+      pip.className = 'bite';
+      this.hungerEl.appendChild(pip);
+      this.hungerPips.push(pip);
+    }
+  }
+
+  /** Paints the hunger row. Ten pips of two points, like the hearts. */
+  updateHunger(points: number): void {
+    if (points === this.shownHunger) return;
+    this.shownHunger = points;
+    for (let i = 0; i < this.hungerPips.length; i++) {
+      const filled = points - i * 2;
+      this.hungerPips[i].classList.toggle('full', filled >= 2);
+      this.hungerPips[i].classList.toggle('half', filled === 1);
+    }
+    this.hungerEl.classList.toggle('low', points <= 6);
   }
 
   /** Called when the player is hurt: flashes the screen. */

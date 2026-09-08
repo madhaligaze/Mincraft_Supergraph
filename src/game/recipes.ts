@@ -34,6 +34,20 @@ const COBBLE = itemForBlock(Block.Cobblestone);
 /** Any log gives planks; three near-identical recipes rather than a wildcard. */
 const LOGS: readonly Block[] = [Block.OakLog, Block.BirchLog, Block.SpruceLog];
 
+/** The four pieces, in the reference's shapes. */
+function armourRecipes(
+  material: ItemId,
+  set: { helmet: ItemId; chestplate: ItemId; leggings: ItemId; boots: ItemId },
+): Recipe[] {
+  const key = { M: material };
+  return [
+    { pattern: ['MMM', 'M M'], key, result: stack(set.helmet, 1) },
+    { pattern: ['M M', 'MMM', 'MMM'], key, result: stack(set.chestplate, 1) },
+    { pattern: ['MMM', 'M M', 'M M'], key, result: stack(set.leggings, 1) },
+    { pattern: ['M M', 'M M'], key, result: stack(set.boots, 1) },
+  ];
+}
+
 /** `head` is the material a tool's business end is made of. */
 function toolRecipes(
   head: ItemId, pickaxe: ItemId, shovel: ItemId, axe: ItemId,
@@ -80,6 +94,9 @@ const RECIPES: Recipe[] = [
   ...toolRecipes(PLANKS, Item.WoodenPickaxe, Item.WoodenShovel, Item.WoodenAxe),
   ...toolRecipes(COBBLE, Item.StonePickaxe, Item.StoneShovel, Item.StoneAxe),
   ...toolRecipes(Item.IronIngot, Item.IronPickaxe, Item.IronShovel, Item.IronAxe),
+
+  ...armourRecipes(Item.IronIngot, Item.Iron),
+  ...armourRecipes(Item.Diamond, Item.Diamond_),
 
   // Back the other way, so a chest of cobblestone is not a dead end.
   { loose: [COBBLE, COBBLE, COBBLE, COBBLE], result: stack(itemForBlock(Block.Stone), 4) },
