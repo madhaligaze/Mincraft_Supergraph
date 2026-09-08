@@ -15,6 +15,7 @@ import { Hud, facingLabel } from './ui/hud.ts';
 import { Inventory } from './game/inventory.ts';
 import { ItemEntities } from './game/entities.ts';
 import { Furnaces } from './game/smelting.ts';
+import { Chests, chestCount } from './game/chests.ts';
 import { WorldReactions } from './game/worldreact.ts';
 import { dropsFor } from './game/drops.ts';
 import { breakSeconds } from './game/mining.ts';
@@ -22,6 +23,7 @@ import { itemByName, itemDef, stack, type ItemStack } from './game/items.ts';
 import { InventoryWindow } from './ui/inventory.ts';
 import { buildIcons } from './ui/icons.ts';
 import { buildItemInstances } from './render/itemInstances.ts';
+import { buildHeldItem, HELD_ITEM_FLOATS } from './render/heldItem.ts';
 import { matchRecipe } from './game/recipes.ts';
 import {
   loadSettings, saveSettings, presetSettings, type PresetName, type Settings,
@@ -157,6 +159,7 @@ async function boot(): Promise<void> {
   const player = new Player(world, input, inventory);
   const items = new ItemEntities();
   const furnaces = new Furnaces();
+  const chests = new Chests();
 
   // Sand that falls and leaves that rot: the world's own answer to being dug.
   const reactions = new WorldReactions(world, items);
@@ -182,6 +185,7 @@ async function boot(): Promise<void> {
     player.hotbarIndex = resumed.hotbar;
     inventory.load(resumed.inventory);
     furnaces.load(resumed.furnaces);
+    chests.load(resumed.chests);
     renderer.sky.timeOfDay = resumed.time;
   }
 
@@ -449,6 +453,8 @@ async function boot(): Promise<void> {
     },
     /** Registry name -> item id. */
     itemId: (name: string) => itemByName(name),
+    /** The instance the held item was built from, for looking at the numbers. */
+    get heldInstance() { return frame.heldItem ? [...frame.heldItem] : null; },
     /**
      * Puts a named item in hand, moving it to the hotbar if it is in storage.
      *
@@ -486,6 +492,13 @@ async function boot(): Promise<void> {
     })),
     /** Progress on the block being mined, 0..1, or -1 when not mining. */
     breakProgress: () => player.breaking?.progress ?? -1,
+    /** What the hand is doing: what it holds, and how far through a swing. */
+    hand: () => ({
+      item: inventory.held ? itemDef(inventory.held.id).name : null,
+      drawn: frame.heldItem !== null,
+      sprite: frame.heldIsSprite,
+      swing: player.swing,
+    }),
     /** Health in half-hearts, whether the player is dead, and from what. */
     vitals: () => ({
       health: player.health,
@@ -521,6 +534,25 @@ async function boot(): Promise<void> {
       return result ? { item: itemDef(result.id).name, count: result.count } : null;
     },
     furnaces,
+    chests,
+    /** Opens the chest at these coordinates, as a right-click would. */
+    openChest(x: number, y: number, z: number) {
+      if (world.getBlock(x, y, z) !== Block.Chest) return null;
+      const slots = chests.at(x, y, z);
+      inventoryWindow.showChest(slots);
+      return slots.length;
+    },
+    /** What one chest holds, by item name. */
+    chestState(x: number, y: number, z: number) {
+      const slots = chests.peek(x, y, z);
+      if (!slots) return null;
+      return {
+        total: chestCount(slots),
+        items: slots.map((s, index) => (s
+          ? { index, item: itemDef(s.id).name, count: s.count } : null))
+          .filter((s) => s !== null),
+      };
+    },
     /**
      * Runs the furnaces forward by `seconds`, now.
      *
@@ -673,6 +705,8 @@ async function boot(): Promise<void> {
   const underwaterTint = vec3(0.1, 0.29, 0.34);
   /** Instance stream for dropped items; sized for the entity cap. */
   const itemInstances = new Float32Array(256 * ITEM_INSTANCE_FLOATS);
+  /** One more instance, for whatever is in the player's hand. */
+  const heldInstance = new Float32Array(HELD_ITEM_FLOATS);
   const frame: FrameState = {
     cameraPosition: player.camera.position,
     cameraForward: player.camera.forward,
@@ -691,6 +725,8 @@ async function boot(): Promise<void> {
     itemCubes: 0,
     itemSprites: 0,
     breaking: null,
+    heldItem: null,
+    heldIsSprite: false,
   };
 
   let running = false;
@@ -702,6 +738,7 @@ async function boot(): Promise<void> {
   let savedInventory: number[] = inventory.serialize();
   let savedInventoryVersion = inventory.version;
   let savedFurnaces: number[] = furnaces.serialize();
+  let savedChests: number[] = chests.serialize();
   let furnaceSaveTimer = 4;
 
   /** Rolling frame times in milliseconds, for the benchmark script. */
@@ -849,6 +886,9 @@ async function boot(): Promise<void> {
           if (event.block === Block.Furnace || event.block === Block.FurnaceLit) {
             const inside = furnaces.remove(event.x, event.y, event.z);
             if (inside.length > 0) items.spawnFromBlock(event.x, event.y, event.z, inside);
+          } else if (event.block === Block.Chest) {
+            const inside = chests.remove(event.x, event.y, event.z);
+            if (inside.length > 0) items.spawnFromBlock(event.x, event.y, event.z, inside);
           }
           if (inventory.damageHeld(1)) audio.dig(event.block);
         } else if (event.kind === 'place') {
@@ -858,6 +898,8 @@ async function boot(): Promise<void> {
             inventoryWindow.show(3, 'Верстак');
           } else if (event.block === Block.Furnace || event.block === Block.FurnaceLit) {
             inventoryWindow.showFurnace(furnaces.at(event.x, event.y, event.z));
+          } else if (event.block === Block.Chest) {
+            inventoryWindow.showChest(chests.at(event.x, event.y, event.z));
           }
         }
       }
@@ -912,6 +954,10 @@ async function boot(): Promise<void> {
       furnaceSaveTimer = 4;
       const next = furnaces.serialize();
       if (next.length > 0 || savedFurnaces.length > 0) savedFurnaces = next;
+      // Chests have no timer, but they are edited through a window rather than
+      // through the inventory's version counter, so they ride the same clock.
+      const nextChests = chests.serialize();
+      if (nextChests.length > 0 || savedChests.length > 0) savedChests = nextChests;
     }
     world.recordPlayerState({
       x: player.position[0], y: player.position[1], z: player.position[2],
@@ -919,6 +965,7 @@ async function boot(): Promise<void> {
       time: renderer.sky.timeOfDay, hotbar: player.hotbarIndex,
       inventory: savedInventory,
       furnaces: savedFurnaces,
+      chests: savedChests,
     });
     world.updateSave(dt);
     // Fluids tick on their own clock inside; passing dt every frame is what
@@ -966,6 +1013,21 @@ async function boot(): Promise<void> {
     const instances = buildItemInstances(items.list, world, icons, itemInstances);
     frame.itemCubes = instances.cubes;
     frame.itemSprites = instances.sprites;
+
+    // The hand. Empty hands draw nothing: there is no arm model, and inventing
+    // one would be a bigger lie than showing nothing.
+    const held = inventory.held;
+    if (held && !inventoryWindow.isOpen && !player.dead) {
+      const bob = player.handBob;
+      const result = buildHeldItem(
+        heldInstance, held, player.camera, world, icons,
+        player.swing, bob.phase, bob.amount,
+      );
+      frame.heldItem = heldInstance;
+      frame.heldIsSprite = result.sprite;
+    } else {
+      frame.heldItem = null;
+    }
 
     mark = performance.now();
     renderer.render(frame);

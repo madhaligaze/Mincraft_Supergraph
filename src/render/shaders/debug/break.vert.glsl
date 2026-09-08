@@ -18,9 +18,18 @@ const vec3 FACE_U[6] = vec3[6](
   vec3(0, 0, -1), vec3(0, 0, 1), vec3(1, 0, 0),
   vec3(1, 0, 0), vec3(1, 0, 0), vec3(-1, 0, 0)
 );
+/**
+ * Chosen so that u × v equals the face normal for **every** face.
+ *
+ * The top and bottom rows used to be the other way round, which made their
+ * winding clockwise from outside — so back-face culling threw them away and a
+ * dropped block was drawn as four side faces with no lid. It reads as a flat
+ * plate rather than a cube, which is exactly how the item in the player's hand
+ * looked until this line was checked with a cross product instead of an eye.
+ */
 const vec3 FACE_V[6] = vec3[6](
-  vec3(0, 1, 0), vec3(0, 1, 0), vec3(0, 0, 1),
-  vec3(0, 0, -1), vec3(0, 1, 0), vec3(0, 1, 0)
+  vec3(0, 1, 0), vec3(0, 1, 0), vec3(0, 0, -1),
+  vec3(0, 0, 1), vec3(0, 1, 0), vec3(0, 1, 0)
 );
 const vec2 CORNERS[6] = vec2[6](
   vec2(0, 0), vec2(1, 0), vec2(1, 1),

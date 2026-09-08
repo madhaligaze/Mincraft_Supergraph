@@ -126,10 +126,28 @@ export interface FrameState {
   itemSprites: number;
   /** The block being mined and how far along it is, 0..1. */
   breaking: { x: number; y: number; z: number; progress: number } | null;
+  /**
+   * The item in the player's hand: one instance, same layout as the others.
+   *
+   * Null when the hand is empty. It is drawn with the world rather than in a
+   * separate near-plane projection — at half a block from the eye the reversed-Z
+   * buffer has precision to spare, and it means the held block is lit, fogged
+   * and anti-aliased by exactly the same code as everything else.
+   */
+  heldItem: Float32Array | null;
+  /** Whether the held instance is a flat icon rather than a cube. */
+  heldIsSprite: boolean;
 }
 
-/** Floats per dropped-item instance: position+spin, tint+scale, layers+light. */
-export const ITEM_INSTANCE_FLOATS = 12;
+/**
+ * Floats per item instance: position+spin, tint+scale, layers+light, tilt.
+ *
+ * Four `vec4`s, because that is what a vertex attribute divides into and the
+ * fourth exists only for the item in the player's hand — a dropped item has no
+ * tilt, and paying four floats for it in every instance is cheaper than a
+ * second program.
+ */
+export const ITEM_INSTANCE_FLOATS = 16;
 
 export interface RenderStats {
   drawCalls: number;
@@ -189,6 +207,9 @@ export class Renderer implements MeshSink {
   private itemCapacity = 0;
   /** Icon sprites for items that are not blocks. */
   private iconArray: WebGLTexture | null = null;
+  /** One instance, redrawn every frame: whatever is in the player's hand. */
+  private heldVao: WebGLVertexArrayObject | null = null;
+  private heldBuffer: WebGLBuffer | null = null;
   private readonly sceneData = new Float32Array(SCENE_FLOATS);
 
   // Matrices
@@ -735,6 +756,15 @@ export class Renderer implements MeshSink {
       this.renderWeather();
       profiler.end();
     }
+    // After the world and before the outline: the hand belongs to the player,
+    // not to the scene, so nothing in the scene may cover it except the water
+    // and glass it is genuinely behind.
+    if (frame.heldItem) {
+      profiler.begin('held item');
+      this.renderHeldItem(frame);
+      profiler.end();
+    }
+
     if (frame.selection) this.renderSelection(frame.selection);
     if (frame.breaking && frame.breaking.progress > 0) this.renderBreaking(frame.breaking);
 
@@ -1611,7 +1641,7 @@ export class Renderer implements MeshSink {
       gl.bindVertexArray(vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       const stride = ITEM_INSTANCE_FLOATS * 4;
-      for (let location = 0; location < 3; location++) {
+      for (let location = 0; location < 4; location++) {
         gl.enableVertexAttribArray(location);
         gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, location * 16);
         gl.vertexAttribDivisor(location, 1);
@@ -1683,7 +1713,7 @@ export class Renderer implements MeshSink {
       const stride = ITEM_INSTANCE_FLOATS * 4;
       const offset = frame.itemCubes * stride;
       gl.bindBuffer(gl.ARRAY_BUFFER, this.itemBuffer);
-      for (let location = 0; location < 3; location++) {
+      for (let location = 0; location < 4; location++) {
         gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, offset + location * 16);
       }
 
@@ -1693,11 +1723,77 @@ export class Renderer implements MeshSink {
       this.stats.drawCalls++;
       this.state.setCull(true, gl.BACK);
 
-      for (let location = 0; location < 3; location++) {
+      for (let location = 0; location < 4; location++) {
         gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, location * 16);
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
     }
+  }
+
+  /**
+   * The item in the player's hand.
+   *
+   * Its own tiny buffer rather than a slot in the dropped-item stream: the two
+   * are drawn at different moments — this one after the world, so a wall the
+   * player is standing against does not swallow it — and sharing one buffer
+   * would mean re-uploading every dropped item to move the hand.
+   */
+  private renderHeldItem(frame: FrameState): void {
+    if (!frame.heldItem || !this.materials) return;
+
+    const gl = this.gl;
+    const program = this.programs.get('item');
+
+    if (!this.heldVao) {
+      const vao = gl.createVertexArray();
+      const buffer = gl.createBuffer();
+      if (!vao || !buffer) throw new Error('Не удалось создать буфер руки');
+      this.heldVao = vao;
+      this.heldBuffer = buffer;
+
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, ITEM_INSTANCE_FLOATS * 4, gl.DYNAMIC_DRAW);
+      const stride = ITEM_INSTANCE_FLOATS * 4;
+      for (let location = 0; location < 4; location++) {
+        gl.enableVertexAttribArray(location);
+        gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, location * 16);
+        gl.vertexAttribDivisor(location, 1);
+      }
+      gl.bindVertexArray(null);
+      this.state.invalidate();
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.heldBuffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, frame.heldItem);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+    this.state.useProgram(program.handle);
+    this.state.setDepthTest(true);
+    this.state.setDepthWrite(true);
+    this.state.setBlend(false);
+    this.state.setCull(frame.heldIsSprite ? false : true, gl.BACK);
+
+    this.state.bindTexture(0, gl.TEXTURE_2D_ARRAY, this.materials.albedo);
+    this.state.bindTexture(4, gl.TEXTURE_2D, this.sky.skyView.texture);
+    this.state.bindTexture(5, gl.TEXTURE_2D, this.sky.transmittance.texture);
+    if (this.iconArray) this.state.bindTexture(7, gl.TEXTURE_2D_ARRAY, this.iconArray);
+
+    program.int('uAlbedoArray', 0);
+    program.int('uSkyViewLut', 4);
+    program.int('uTransmittanceLut', 5);
+    program.int('uIconArray', 7);
+    program.float('uCameraRadiusKm', this.sky.cameraRadiusKm);
+    program.vec2('uHorizonAngles', this.sky.horizonAngles[0], this.sky.horizonAngles[1]);
+    program.float('uSeaLevel', SEA_LEVEL);
+    program.int('uDebugView', this.debugView);
+    program.vec3('uDebugBucket', 0.9, 0.6, 0.15);
+    program.int('uSprite', frame.heldIsSprite ? 1 : 0);
+
+    this.state.bindVAO(this.heldVao);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, frame.heldIsSprite ? 6 : 36, 1);
+    this.stats.drawCalls++;
+    this.state.setCull(true, gl.BACK);
   }
 
   /** Cracks on the block the player is mining. */
@@ -1973,6 +2069,8 @@ export class Renderer implements MeshSink {
     if (this.iconArray) this.gl.deleteTexture(this.iconArray);
     if (this.itemBuffer) this.gl.deleteBuffer(this.itemBuffer);
     if (this.itemVao) this.gl.deleteVertexArray(this.itemVao);
+    if (this.heldBuffer) this.gl.deleteBuffer(this.heldBuffer);
+    if (this.heldVao) this.gl.deleteVertexArray(this.heldVao);
     if (this.tintAtlas) this.gl.deleteTexture(this.tintAtlas);
     if (this.materials) {
       this.gl.deleteTexture(this.materials.albedo);

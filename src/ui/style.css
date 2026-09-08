@@ -424,6 +424,17 @@ body.playing #viewport { cursor: none; }
 /* The hotbar row sits apart from the storage rows, as in the reference. */
 .inv-hotbar-row { margin-top: 10px; }
 
+/*
+ * A chest's slots are separated from the player's by a rule, not by a gap
+ * alone: "which of these is mine" is the one question the window must never
+ * leave open.
+ */
+.inv-chest {
+  padding-bottom: 14px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
 .islot {
   position: relative;
   width: 42px;

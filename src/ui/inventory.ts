@@ -17,6 +17,7 @@ import { Inventory, CraftGrid, HOTBAR_SIZE, INVENTORY_SIZE, type Slot } from '..
 import { matchRecipe } from '../game/recipes.ts';
 import { itemDef, maxStack, sameItem, stack, type ItemStack } from '../game/items.ts';
 import { SMELT_SECONDS, fuelSeconds, smeltResult, type FurnaceState } from '../game/smelting.ts';
+import { Chests, CHEST_SIZE } from '../game/chests.ts';
 import type { IconSet } from './icons.ts';
 
 export interface InventoryCallbacks {
@@ -32,7 +33,8 @@ type Target =
   | { kind: 'craft'; index: number }
   | { kind: 'result' }
   | { kind: 'furnace'; slot: 'input' | 'fuel' }
-  | { kind: 'furnaceOut' };
+  | { kind: 'furnaceOut' }
+  | { kind: 'chest'; index: number };
 
 export class InventoryWindow {
   private readonly root: HTMLElement;
@@ -48,6 +50,11 @@ export class InventoryWindow {
   private hotbarSlots: HTMLElement[] = [];
 
   readonly grid = new CraftGrid(2);
+
+  /** The chest this window is showing, or null. */
+  private chest: Slot[] | null = null;
+  private chestEl: HTMLElement;
+  private chestSlots: HTMLElement[] = [];
 
   /** The furnace this window is showing, or null when it is a crafting window. */
   private furnace: FurnaceState | null = null;
@@ -133,6 +140,19 @@ export class InventoryWindow {
     this.bindSlot(input, { kind: 'furnace', slot: 'input' });
     this.bindSlot(fuel, { kind: 'furnace', slot: 'fuel' });
     this.bindSlot(output, { kind: 'furnaceOut' });
+
+    // Twenty-seven slots in three rows, above the bag and separated from it —
+    // the reference's layout, and the reason a player never wonders which half
+    // of the window is theirs.
+    this.chestEl = document.createElement('div');
+    this.chestEl.className = 'inv-grid inv-chest';
+    this.chestEl.hidden = true;
+    panel.appendChild(this.chestEl);
+    for (let i = 0; i < CHEST_SIZE; i++) {
+      const slot = this.makeSlot({ kind: 'chest', index: i });
+      this.chestEl.appendChild(slot);
+      this.chestSlots.push(slot);
+    }
 
     this.storageEl = document.createElement('div');
     this.storageEl.className = 'inv-grid';
@@ -236,8 +256,24 @@ export class InventoryWindow {
       return;
     }
 
+    if (target.kind === 'chest') {
+      this.clickChest(target.index, button, shift);
+      this.refresh(true);
+      return;
+    }
+
     if (target.kind === 'inventory') {
-      if (shift && button === 0) this.inventory.quickMove(target.index);
+      if (shift && button === 0 && this.chest) {
+        // With a chest open, shift-click means "into the chest" — moving a
+        // stack between the two halves of your own bag is not what anyone
+        // wants while standing at a container.
+        const slot = this.inventory.get(target.index);
+        if (slot) {
+          const left = Chests.quickMoveInto(this.chest, slot);
+          this.inventory.set(target.index,
+            left > 0 ? stack(slot.id, left, slot.damage) : null);
+        }
+      } else if (shift && button === 0) this.inventory.quickMove(target.index);
       else if (button === 2) this.inventory.rightClickSlot(target.index);
       else this.inventory.clickSlot(target.index);
       this.refresh(true);
@@ -288,6 +324,56 @@ export class InventoryWindow {
       this.inventory.cursor = cell;
     }
     this.refresh(true);
+  }
+
+  /**
+   * A chest slot: the same swap-or-merge rules as the bag, on someone else's
+   * array. Shift-click sends the stack the other way, into the bag.
+   */
+  private clickChest(index: number, button: number, shift: boolean): void {
+    const chest = this.chest;
+    if (!chest) return;
+    const current = chest[index] ?? null;
+
+    if (shift && button === 0 && current) {
+      const left = this.inventory.add(current);
+      chest[index] = left > 0 ? stack(current.id, left, current.damage) : null;
+      return;
+    }
+
+    const cursor = this.inventory.cursor;
+
+    if (button === 2) {
+      if (!cursor) {
+        if (!current) return;
+        const half = Math.ceil(current.count / 2);
+        this.inventory.cursor = stack(current.id, half, current.damage);
+        current.count -= half;
+        chest[index] = current.count > 0 ? current : null;
+        return;
+      }
+      if (!current) {
+        chest[index] = stack(cursor.id, 1, cursor.damage);
+        cursor.count--;
+      } else if (sameItem(current, cursor) && current.count < maxStack(current.id)) {
+        current.count++;
+        cursor.count--;
+      }
+      if (cursor.count <= 0) this.inventory.cursor = null;
+      return;
+    }
+
+    if (cursor && current && sameItem(cursor, current)) {
+      const limit = maxStack(current.id);
+      const moved = Math.min(limit - current.count, cursor.count);
+      current.count += moved;
+      cursor.count -= moved;
+      if (cursor.count <= 0) this.inventory.cursor = null;
+      return;
+    }
+
+    chest[index] = cursor;
+    this.inventory.cursor = current;
   }
 
   /**
@@ -421,7 +507,20 @@ export class InventoryWindow {
       this.buildCraft();
     }
     this.furnace = null;
+    this.chest = null;
     this.setMode('craft');
+    this.titleEl.textContent = title;
+    this.open = true;
+    this.root.hidden = false;
+    this.refresh(true);
+    this.callbacks.onVisibility(true);
+  }
+
+  /** Opens onto one chest's contents. */
+  showChest(slots: Slot[], title = 'Сундук'): void {
+    this.chest = slots;
+    this.furnace = null;
+    this.setMode('chest');
     this.titleEl.textContent = title;
     this.open = true;
     this.root.hidden = false;
@@ -432,6 +531,7 @@ export class InventoryWindow {
   /** Opens onto one furnace's contents instead of a crafting grid. */
   showFurnace(state: FurnaceState, title = 'Печь'): void {
     this.furnace = state;
+    this.chest = null;
     this.setMode('furnace');
     this.titleEl.textContent = title;
     this.open = true;
@@ -440,11 +540,12 @@ export class InventoryWindow {
     this.callbacks.onVisibility(true);
   }
 
-  private setMode(mode: 'craft' | 'furnace'): void {
+  private setMode(mode: 'craft' | 'furnace' | 'chest'): void {
     const craft = mode === 'craft';
     this.craftEl.hidden = !craft;
     this.resultEl.hidden = !craft;
-    this.furnaceEl.hidden = craft;
+    this.furnaceEl.hidden = mode !== 'furnace';
+    this.chestEl.hidden = mode !== 'chest';
     const arrow = this.root.querySelector('.inv-arrow') as HTMLElement | null;
     if (arrow) arrow.hidden = !craft;
   }
@@ -453,9 +554,10 @@ export class InventoryWindow {
     if (!this.open) return;
     this.open = false;
     this.root.hidden = true;
-    // A furnace keeps what is in it — that is the whole point of a container —
-    // so only the crafting grid is emptied back into the bag.
+    // A container keeps what is in it — that is the whole point of one — so
+    // only the crafting grid is emptied back into the bag.
     this.furnace = null;
+    this.chest = null;
 
     // Nothing may stay behind in the grid or on the cursor: an item the player
     // cannot see is an item they have lost.
@@ -498,7 +600,11 @@ export class InventoryWindow {
     for (let i = 0; i < this.storageSlots.length; i++) {
       this.paint(this.storageSlots[i], this.inventory.get(HOTBAR_SIZE + i));
     }
-    if (this.furnace) {
+    if (this.chest) {
+      for (let i = 0; i < this.chestSlots.length; i++) {
+        this.paint(this.chestSlots[i], this.chest[i] ?? null);
+      }
+    } else if (this.furnace) {
       this.paintFurnace(this.furnace);
     } else {
       for (let i = 0; i < this.craftSlots.length; i++) {
@@ -517,6 +623,10 @@ export class InventoryWindow {
       ? `c${this.inventory.cursor.id}x${this.inventory.cursor.count}`
       : 'c-';
     for (const cell of this.grid.cells) out += cell ? `|${cell.id}x${cell.count}` : '|-';
+    const c = this.chest;
+    if (c) {
+      for (const cell of c) out += cell ? `|${cell.id}x${cell.count}` : '|-';
+    }
     const f = this.furnace;
     if (f) {
       // The two gauges move continuously, so the furnace window is the one

@@ -545,6 +545,48 @@ const MATERIALS: Record<TextureName, MaterialFn> = {
   furnace_front_lit: (u, v, _s, out, i) => furnaceFront(u, v, out, i, 1),
 
   /**
+   * The front of a chest: boards, the seam of the lid, and a latch.
+   *
+   * The latch is the whole point. A chest has to be identifiable across a dark
+   * room from a plank block, and at that distance the only thing legible is a
+   * dark horizontal line two thirds up with a metal square on it.
+   */
+  chest_front: (u, v, _s, out, i) => {
+    const grain = fbm(u * 22, v * 8, 22, 3, 3601);
+    const boards = smooth(0.9, 1.0, Math.abs(((u * 4) % 1) - 0.5) * 2) * 0.6;
+
+    // Lid seam across the upper third.
+    const seam = smooth(0.60, 0.635, v) * smooth(0.70, 0.665, v);
+    // Latch: a small plate straddling the seam in the middle.
+    const latch = smooth(0.40, 0.43, u) * smooth(0.60, 0.57, u) *
+      smooth(0.55, 0.58, v) * smooth(0.74, 0.71, v);
+
+    const t = (0.55 + grain * 0.34) * mix(1, 0.55, boards) * mix(1, 0.3, seam);
+    write(out, i,
+      mix(0.46 * t, 0.30, latch),
+      mix(0.30 * t, 0.29, latch),
+      mix(0.15 * t, 0.28, latch),
+      1,
+      (1 - seam) * (0.4 + grain * 0.35) + latch * 0.45,
+      mix(mix(0.8, 0.9, seam), 0.45, latch));
+  },
+
+  chest_side: (u, v, _s, out, i) => {
+    const grain = fbm(u * 22, v * 8, 22, 3, 3607);
+    const seam = smooth(0.60, 0.635, v) * smooth(0.70, 0.665, v);
+    const t = (0.55 + grain * 0.34) * mix(1, 0.3, seam);
+    write(out, i, 0.44 * t, 0.29 * t, 0.15 * t, 1,
+      (1 - seam) * (0.4 + grain * 0.35), mix(0.8, 0.9, seam));
+  },
+
+  chest_top: (u, v, _s, out, i) => {
+    const grain = fbm(u * 20, v * 20, 20, 3, 3613);
+    const rim = 1 - smooth(0.40, 0.48, Math.max(Math.abs(u - 0.5), Math.abs(v - 0.5)));
+    const t = (0.58 + grain * 0.32) * mix(0.7, 1, rim);
+    write(out, i, 0.46 * t, 0.30 * t, 0.16 * t, 1, 0.4 + grain * 0.4, 0.82);
+  },
+
+  /**
    * A torch: a stick in the lower two thirds, a flame on top, nothing else.
    *
    * Cut out rather than drawn on a square, because it is rendered as two
@@ -936,6 +978,7 @@ const NORMAL_STRENGTH: Partial<Record<TextureName, number>> = {
   cobblestone: 3.2, mossy_cobblestone: 3.2, gravel: 3.0, bedrock: 2.6,
   oak_log_side: 2.6, spruce_log_side: 2.6, oak_planks: 2.2, cactus_side: 2.4,
   crafting_table_top: 2.4, crafting_table_side: 2.2,
+  chest_front: 2.4, chest_side: 2.2, chest_top: 2.2,
   tall_grass: 0.4, fern: 0.4, flower_red: 0.4, flower_yellow: 0.4, torch: 0.5,
   flower_blue: 0.4, dead_bush: 0.4,
 };

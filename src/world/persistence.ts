@@ -43,6 +43,8 @@ export interface SavedState {
    * mistake it for a decision.
    */
   furnaces?: number[];
+  /** Chests, as position + a run of filled slots; see `Chests.serialize`. */
+  chests?: number[];
 }
 
 const DB_NAME = 'supergraph';
@@ -151,7 +153,7 @@ export class WorldSave {
       Math.abs(prev.x - next.x) < 0.5 && Math.abs(prev.y - next.y) < 0.5 &&
       Math.abs(prev.z - next.z) < 0.5 && Math.abs(prev.time - next.time) < 0.004 &&
       prev.hotbar === next.hotbar && prev.inventory === next.inventory &&
-      prev.furnaces === next.furnaces) return;
+      prev.furnaces === next.furnaces && prev.chests === next.chests) return;
     this.playerState = next;
     this.stateDirty = true;
   }

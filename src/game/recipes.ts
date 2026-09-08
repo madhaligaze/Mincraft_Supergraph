@@ -63,6 +63,13 @@ const RECIPES: Recipe[] = [
     result: stack(itemForBlock(Block.Torch), 4),
   },
 
+  // Eight planks around an empty middle: the same shape as the furnace, which
+  // is how the reference teaches the shape once and reuses it.
+  {
+    pattern: ['PPP', 'P P', 'PPP'], key: { P: PLANKS },
+    result: stack(itemForBlock(Block.Chest), 1),
+  },
+
   // Eight cobblestone around an empty middle. The furnace is what turns a cave
   // full of iron ore into iron tools, and iron tools into diamonds.
   {

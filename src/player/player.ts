@@ -180,6 +180,15 @@ export class Player {
   /** Set while an inventory window is open: the world must not react to clicks. */
   uiOpen = false;
 
+  /**
+   * How far through a swing the hand is, 0..1, or 1 when it is at rest.
+   *
+   * Driven here rather than in the renderer because what starts a swing is a
+   * game event — a block broken, a block placed, a pick coming down on stone —
+   * and the renderer knows about none of those.
+   */
+  swing = 1;
+
   readonly camera: PlayerCamera = {
     position: vec3(),
     forward: vec3(0, 0, -1),
@@ -196,6 +205,9 @@ export class Player {
 
   /** Blocks per second of downward speed at the moment of landing. */
   private lastFallSpeed = 0;
+
+  /** Seconds one swing takes. Minecraft's is a third of a second. */
+  private static readonly SWING_SECONDS = 0.3;
 
   constructor(
     private readonly world: World,
@@ -250,6 +262,7 @@ export class Player {
     }
 
     this.updateHealth(dt);
+    if (this.swing < 1) this.swing = Math.min(1, this.swing + dt / Player.SWING_SECONDS);
     this.updateCamera(dt, baseFov);
   }
 
@@ -702,6 +715,11 @@ export class Player {
         state.progress += dt / seconds;
       }
 
+      // A swing per hit, restarted as each one finishes: mining is a hand
+      // coming down over and over, and one swing at the end of a seven-second
+      // dig reads as the block giving up on its own.
+      this.startSwing();
+
       if (state.progress >= 1) {
         this.breaking = null;
         return this.world.setBlock(hit.x, hit.y, hit.z, Block.Air)
@@ -746,11 +764,23 @@ export class Player {
 
       if (!overlapsPlayer && replaceable && this.world.setBlock(x, y, z, placing)) {
         this.inventory.consumeHeld(1);
+        this.startSwing();
         return { kind: 'place', block: placing, x, y, z };
       }
     }
 
     return null;
+  }
+
+  /** Starts a swing, unless one is already most of the way through. */
+  startSwing(): void {
+    if (this.swing < 0.55) return;
+    this.swing = 0;
+  }
+
+  /** Walk-cycle phase and amount, so the hand can bob with the camera. */
+  get handBob(): { phase: number; amount: number } {
+    return { phase: this.bobPhase, amount: this.bobAmount };
   }
 
   /** Impact speed of the last landing, consumed by the HUD/audio. */

@@ -1078,8 +1078,11 @@ if (!ironPick || ironPick.item !== 'iron_pickaxe') {
     }
   }
 }
-await shoot('07-smelt');
+await shoot('06b-smelt');
 flushErrors();
+
+/** Everything built for a test goes up here: empty sky, nothing to interfere. */
+const SKY_RIG = 150;
 
 // --- the world answering back --------------------------------------------
 //
@@ -1087,7 +1090,6 @@ flushErrors();
 // not leave its canopy hanging in the sky.
 await act('мир отвечает');
 
-const SKY_RIG = 150;
 const sandRig = await api((floor) => {
   const a = window.supergraph;
   const p = a.player;
@@ -1169,6 +1171,198 @@ if (leavesBefore < 40) {
 } else {
   const sticks = await api(() => window.supergraph.droppedItems().length);
   ok('листва осыпается после вырубки', `${leavesBefore} блоков, выпало ${sticks} предметов`);
+}
+flushErrors();
+
+// --- the hand ------------------------------------------------------------
+//
+// Half the tactile feel of the reference is that your hand moves when you hit
+// something. Checked through the frame the renderer is actually given, not by
+// looking at a screenshot: what is drawn, and whether a swing starts.
+await act('рука');
+
+const emptyHand = await api(() => {
+  const a = window.supergraph;
+  // Make an empty slot rather than hoping for one: by this point in the run the
+  // hotbar is full, and "no empty slot found" used to leave the pickaxe in hand
+  // and report that an empty hand draws a pickaxe.
+  let empty = a.inventory.slots.findIndex((s, i) => i < 9 && !s);
+  if (empty < 0) {
+    empty = 0;
+    const displaced = a.inventory.get(0);
+    a.inventory.set(0, null);
+    if (displaced) a.inventory.add(displaced);
+  }
+  a.inventory.selected = empty;
+  return a.hand();
+});
+if (emptyHand.drawn) {
+  record('note', 'пустая рука что-то рисует', JSON.stringify(emptyHand));
+} else {
+  ok('пустая рука ничего не рисует');
+}
+
+await api(() => {
+  const a = window.supergraph;
+  a.give('cobblestone', 4);
+  a.equip('cobblestone');
+});
+await waitFrames(2);
+const blockHand = await api(() => window.supergraph.hand());
+if (!blockHand.drawn || blockHand.sprite) {
+  record('bad', 'блок в руке не рисуется кубом', JSON.stringify(blockHand));
+} else {
+  ok('блок в руке рисуется кубом', blockHand.item);
+}
+
+await api(() => {
+  const a = window.supergraph;
+  if (a.equip('stone_pickaxe') < 0) { a.give('stone_pickaxe', 1); a.equip('stone_pickaxe'); }
+});
+await waitFrames(2);
+const toolHand = await api(() => window.supergraph.hand());
+if (!toolHand.drawn || !toolHand.sprite) {
+  record('bad', 'инструмент в руке не рисуется иконкой', JSON.stringify(toolHand));
+} else {
+  ok('инструмент в руке рисуется иконкой', toolHand.item);
+}
+
+// A swing has to start when the pick comes down, and finish on its own.
+const swingRig = await api((floor) => {
+  const a = window.supergraph;
+  const p = a.player;
+  const x = Math.round(p.position[0]) + 24;
+  const z = Math.round(p.position[2]);
+  a.fill(x - 1, floor - 1, z - 1, x + 4, floor + 2, z + 1, 0);
+  a.fill(x, floor, z, x, floor, z, a.blockId('stone'));
+  return { x, y: floor, z };
+}, SKY_RIG);
+const onSwingTarget = await aimAt(swingRig.x, swingRig.y, swingRig.z);
+if (!onSwingTarget.ok) {
+  record('note', 'не навёлся на блок для замаха', JSON.stringify(onSwingTarget));
+} else {
+  await api(() => window.supergraph.button(0, true));
+  await waitFrames(1);
+  const swinging = await api(() => window.supergraph.hand().swing);
+  await api(() => window.supergraph.button(0, false));
+  if (swinging >= 1) {
+    record('bad', 'рука не замахивается при добыче', `swing ${swinging}`);
+  } else {
+    ok('рука замахивается при добыче', `swing ${swinging.toFixed(2)}`);
+  }
+  for (let i = 0; i < 12; i++) {
+    await waitFrames(1);
+    if (await api(() => window.supergraph.hand().swing) >= 1) break;
+  }
+  const settled = await api(() => window.supergraph.hand().swing);
+  if (settled < 1) record('bad', 'замах не заканчивается', `swing ${settled}`);
+  else ok('замах заканчивается сам');
+}
+await shoot('07-hand');
+flushErrors();
+
+// --- chests --------------------------------------------------------------
+//
+// Thirty-six slots fill up in one trip down a mine. Without somewhere to put
+// the cobblestone the only way to make room is to throw it away, which is not
+// a decision, it is an accident waiting to happen.
+await act('сундук');
+
+await api(() => window.supergraph.give('oak_planks', 8));
+const chestCrafted = await craftIn([
+  'oak_planks', 'oak_planks', 'oak_planks',
+  'oak_planks', null, 'oak_planks',
+  'oak_planks', 'oak_planks', 'oak_planks',
+], 3);
+if (!chestCrafted || chestCrafted.item !== 'chest') {
+  record('stop', 'сундук не крафтится из досок', JSON.stringify(chestCrafted));
+} else {
+  ok('сундук скрафчен');
+
+  const chestSpot = await api((floor) => {
+    const a = window.supergraph;
+    const p = a.player;
+    const x = Math.round(p.position[0]) + 20;
+    const z = Math.round(p.position[2]);
+    a.fill(x - 1, floor - 1, z - 1, x + 4, floor + 3, z + 1, 0);
+    a.fill(x, floor, z, x, floor, z, a.blockId('stone'));
+    return { x, y: floor, z };
+  }, SKY_RIG);
+
+  const inHandChest = await api(() => window.supergraph.equip('chest'));
+  const onSpot = await aimAt(chestSpot.x, chestSpot.y, chestSpot.z);
+  if (inHandChest < 0 || !onSpot.ok) {
+    record('note', 'сундук некуда поставить', `${inHandChest} ${JSON.stringify(onSpot)}`);
+  } else {
+    await api(() => window.supergraph.button(2, true));
+    await waitFrames(2);
+    await api(() => window.supergraph.button(2, false));
+    await waitFrames(2);
+    const at = { x: chestSpot.x + 1, y: chestSpot.y, z: chestSpot.z };
+    const placedChest = await api((c) => window.supergraph.blockName(
+      window.supergraph.world.getBlock(c.x, c.y, c.z)), at);
+
+    if (placedChest !== 'chest') {
+      record('bad', 'сундук не встал', `на месте ${placedChest}`);
+    } else {
+      ok('сундук поставлен', `${at.x} ${at.y} ${at.z}`);
+
+      // Put something in through the window, the way a player does: open it,
+      // shift-click a stack out of the bag.
+      const stored = await api((c) => {
+        const a = window.supergraph;
+        a.give('cobblestone', 30);
+        a.openChest(c.x, c.y, c.z);
+        const index = a.inventory.slots.findIndex((s) => s && a.blockName(s.id) === 'cobblestone');
+        const el = index < 9
+          ? document.querySelectorAll('#inventory .inv-hotbar-row .islot')[index]
+          : document.querySelectorAll('#inventory .inv-grid:not(.inv-hotbar-row):not(.inv-chest) .islot')[index - 9];
+        el.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, shiftKey: true }));
+        return { chest: a.chestState(c.x, c.y, c.z), bag: a.have('cobblestone') };
+      }, at);
+
+      if (!stored.chest || stored.chest.total < 30) {
+        record('bad', 'shift-клик не кладёт стопку в сундук', JSON.stringify(stored));
+      } else if (stored.bag !== 0) {
+        record('bad', 'стопка положена в сундук, но осталась и в сумке',
+          `в сумке ${stored.bag}`);
+      } else {
+        ok('shift-клик кладёт стопку в сундук', `${stored.chest.total} блоков`);
+      }
+      await shoot('08-chest');
+      await api(() => window.supergraph.closeInventory());
+      await waitFrames(1);
+
+      // Closing must not empty it, and breaking it must give everything back.
+      const kept = await api((c) => window.supergraph.chestState(c.x, c.y, c.z), at);
+      if (!kept || kept.total < 30) {
+        record('stop', 'сундук потерял содержимое при закрытии', JSON.stringify(kept));
+      } else {
+        ok('сундук держит содержимое', `${kept.total} блоков`);
+      }
+
+      await api(() => {
+        const a = window.supergraph;
+        a.items.clear();
+        if (a.equip('stone_axe') < 0) { a.give('stone_axe', 1); a.equip('stone_axe'); }
+      });
+      const onChest = await aimAt(at.x, at.y, at.z);
+      if (onChest.ok) {
+        const broken = await mineAimed(80);
+        const spilled = await api(() => window.supergraph.droppedItems());
+        const cobble = spilled.filter((d) => d.item === 'cobblestone')
+          .reduce((sum, d) => sum + d.count, 0);
+        if (!broken || !broken.gone) {
+          record('bad', 'сундук не ломается', JSON.stringify(broken));
+        } else if (cobble < 30) {
+          record('stop', 'сломанный сундук съел содержимое',
+            `выпало ${cobble} булыжника из 30`);
+        } else {
+          ok('сломанный сундук отдаёт содержимое', `${cobble} булыжника`);
+        }
+      }
+    }
+  }
 }
 flushErrors();
 
@@ -1343,7 +1537,7 @@ if (!vitals0 || vitals0.max !== 20) {
     } else {
       ok('при смерти вещи выпадают', `${died.ground} стопок на земле`);
     }
-    await shoot('08-death');
+    await shoot('09-death');
 
     const back = await api(() => window.supergraph.respawn());
     if (back.dead || back.health < 20) {
@@ -1382,7 +1576,7 @@ if (!swam) {
   const w = await state();
   if (!w.underwater) record('bad', 'под водой игра не считает игрока под водой');
   else ok('погружение распознано', `дыхание ${(w.breath * 100).toFixed(0)}%`);
-  await shoot('09-underwater');
+  await shoot('10-underwater');
 
   // Breath must actually drain.
   await sleep(6000);
@@ -1422,7 +1616,7 @@ await api(() => {
   a.faceSun(2.6, -0.05);
 });
 await sleep(9000);
-await shoot('10-night');
+await shoot('11-night');
 flushErrors();
 
 // --- what a session costs ------------------------------------------------

@@ -48,6 +48,7 @@ const SHOVEL: readonly Block[] = [
 
 const AXE: readonly Block[] = [
   Block.OakLog, Block.BirchLog, Block.SpruceLog, Block.OakPlanks, Block.CraftingTable,
+  Block.Chest,
 ];
 
 for (const [block, tier] of PICKAXE) {

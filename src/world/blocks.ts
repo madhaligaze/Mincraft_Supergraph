@@ -82,6 +82,7 @@ export const enum Block {
   Furnace,
   FurnaceLit,
   Torch,
+  Chest,
 
   Count,
 }
@@ -163,6 +164,7 @@ export const TEXTURES = [
   // is worse than one that faces every way.
   'furnace_front', 'furnace_front_lit', 'furnace_top',
   'torch',
+  'chest_front', 'chest_side', 'chest_top',
 ] as const;
 
 export type TextureName = (typeof TEXTURES)[number];
@@ -462,6 +464,19 @@ register(def({
   light: 14, lightAttenuation: 0, roughness: 0.7, hardness: 0,
 }));
 
+/**
+ * Twenty-seven slots in a block.
+ *
+ * The answer to the question the inventory asked: thirty-six slots fill up in
+ * one trip down a mine, and without somewhere to put the cobblestone the only
+ * way to make room is to throw it away.
+ */
+register(def({
+  id: Block.Chest, name: 'chest', label: 'Сундук',
+  textures: ['chest_front', 'chest_top', 'chest_top'],
+  roughness: 0.72, hardness: 2.5,
+}));
+
 for (let id = 0; id < Block.Count; id++) {
   if (!DEFS[id]) throw new Error(`Блок ${id} не зарегистрирован`);
 }
@@ -561,6 +576,7 @@ const ALBEDO: Partial<Record<Block, readonly [number, number, number]>> = {
   [Block.Lava]: [0.60, 0.20, 0.04],
   [Block.Cactus]: [0.10, 0.20, 0.07],
   [Block.Torch]: [0.75, 0.55, 0.25],
+  [Block.Chest]: [0.32, 0.22, 0.11],
 };
 
 /** Three linear floats per block id. */
@@ -606,6 +622,7 @@ const SOUND_OVERRIDES: Partial<Record<Block, SoundFamily>> = {
   [Block.OakPlanks]: 'wood',
   [Block.CraftingTable]: 'wood',
   [Block.Torch]: 'wood',
+  [Block.Chest]: 'wood',
   [Block.OakLeaves]: 'grass',
   [Block.BirchLeaves]: 'grass',
   [Block.SpruceLeaves]: 'grass',
